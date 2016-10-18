@@ -1,3 +1,5 @@
+#![feature(question_mark)]
+
 pub mod wal;
 
 #[cfg(test)]
