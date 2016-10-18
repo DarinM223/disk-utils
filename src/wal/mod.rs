@@ -1,9 +1,11 @@
 use std::fs;
 use std::fs::File;
 use std::io;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
+/// Calls a method for an object contained inside
+/// an option and returns an option of the result.
 macro_rules! call_opt {
     ($var:expr, $meth:ident($( $param:expr ),*)) => (match $var {
         Some(ref v) => Some(v.$meth($($param),*)),
@@ -22,7 +24,7 @@ pub enum RecordType {
 }
 
 /// 32KB Block size.
-pub const BLOCK_SIZE: u64 = 32000;
+pub const BLOCK_SIZE: i64 = 32000;
 
 #[derive(Clone)]
 pub struct Record {
@@ -54,24 +56,24 @@ pub trait Serializable {
 /// Iterator that reads through the write ahead log.
 pub struct WalIterator {
     file: File,
-    file_len: u64,
+    file_len: i64,
     block: Option<Vec<Record>>,
     block_index: Option<i32>,
-    pos: Option<u64>,
+    pos: Option<i64>,
 }
 
 impl WalIterator {
     pub fn new<P: AsRef<Path>>(path: &P) -> io::Result<WalIterator> {
         Ok(WalIterator {
             file: File::open(path)?,
-            file_len: fs::metadata(path)?.len(),
+            file_len: fs::metadata(path)?.len() as i64,
             block: None,
             block_index: None,
             pos: None,
         })
     }
 
-    fn get_pos(&mut self, default: u64) -> u64 {
+    fn get_pos(&mut self, default: i64) -> i64 {
         match self.pos {
             Some(pos) => pos,
             None => {
@@ -82,8 +84,49 @@ impl WalIterator {
     }
 
     /// Fetches a block of records at the specified position.
-    fn fetch_block(&mut self, position: u64) -> io::Result<()> {
-        unimplemented!()
+    fn fetch_block(&mut self, position: i64) -> io::Result<()> {
+        self.file.seek(SeekFrom::Start(position as u64))?;
+        let mut buf = [0; BLOCK_SIZE as usize];
+        self.file.read_exact(&mut buf)?;
+        // TODO(DarinM223): read records from the bytes
+        Ok(())
+    }
+
+    /// Fetches the correct block if the position has moved outside the current block
+    /// or if the current block hasn't been loaded yet.
+    fn load_block(&mut self, position: i64) -> io::Result<bool> {
+        if let Some(block_index) = self.block_index {
+            let block_len = call_opt!(self.block, len()).unwrap();
+            if block_index < 0 {
+                *self.pos.as_mut().unwrap() -= BLOCK_SIZE;
+
+                let pos = self.pos.unwrap();
+                if is_out_of_bounds(pos, self.file_len) {
+                    return Ok(true);
+                }
+                self.fetch_block(pos)?;
+
+                let index = block_len as i32 - 1;
+                self.block_index = Some(index);
+            } else if block_index as usize >= block_len {
+                *self.pos.as_mut().unwrap() += BLOCK_SIZE;
+
+                let pos = self.pos.unwrap();
+                if is_out_of_bounds(pos, self.file_len) {
+                    return Ok(true);
+                }
+                self.fetch_block(pos)?;
+
+                self.block_index = Some(0);
+            }
+        } else {
+            if is_out_of_bounds(position, self.file_len) {
+                return Ok(true);
+            }
+            self.fetch_block(position)?;
+        }
+
+        Ok(false)
     }
 }
 
@@ -94,47 +137,15 @@ impl Iterator for WalIterator {
     /// increment into the next record.
     fn next(&mut self) -> Option<Record> {
         let pos = self.get_pos(0);
-        if let Some(block_index) = self.block_index {
-            //     pos       next_pos                             new_pos
-            //      |          |   padding                         |
-            //      V          V   ....                            V
-            // +-----------------------+-----------------------+--------------------+
-            // |-----BLOCK_SIZE--------|-------BLOCK_SIZE------|-----BLOCK_SIZE-----|
-            //
-            // if BLOCK_SIZE = 4
-            // and new_pos = 14,
-            //
-            // 14 / 4 = 3.5 = 3
-            //
-            // the new block position should be the 4 * 3 = 12th byte,
-            // which means starting from 0 it would be an index of 12 - 1 = 11.
-            //
-            // Fetch block where pos is located if pos is not in the current block.
-            let block_len = call_opt!(self.block, len()).unwrap();
-            let new_block_pos = (pos / BLOCK_SIZE) * BLOCK_SIZE - 1;
-            if block_index < 0 {
-                self.fetch_block(new_block_pos).unwrap();
-                let index = block_len as i32 - 1;
-                self.block_index = Some(index);
-            } else if block_index as usize >= block_len {
-                self.fetch_block(new_block_pos).unwrap();
-                self.block_index = Some(0);
-            }
-
-            let next = call_opt!(self.block, get(block_index as usize)).unwrap().unwrap();
-            if let Some(ref mut index) = self.block_index {
-                *index += 1;
-            }
-            Some(next.clone())
-        } else {
-            self.fetch_block(pos).unwrap();
-            let block_index = self.block_index.unwrap() as usize;
-            let next = call_opt!(self.block, get(block_index)).unwrap().unwrap();
-            if let Some(ref mut index) = self.block_index {
-                *index += 1;
-            }
-            Some(next.clone())
+        let out_of_bounds = self.load_block(pos).unwrap();
+        if out_of_bounds {
+            return None;
         }
+
+        let block_index = self.block_index.unwrap() as usize;
+        let next = call_opt!(self.block, get(block_index)).unwrap().unwrap();
+        *self.block_index.as_mut().unwrap() += 1;
+        Some(next.clone())
     }
 }
 
@@ -142,6 +153,21 @@ impl DoubleEndedIterator for WalIterator {
     fn next_back(&mut self) -> Option<Record> {
         let end_pos = self.file_len - 1;
         let pos = self.get_pos(end_pos);
-        unimplemented!()
+        let out_of_bounds = self.load_block(pos).unwrap();
+        if out_of_bounds {
+            return None;
+        }
+
+        let block_index = self.block_index.unwrap() as usize;
+        let next = call_opt!(self.block, get(block_index)).unwrap().unwrap();
+        *self.block_index.as_mut().unwrap() += 1;
+        Some(next.clone())
     }
+}
+
+fn is_out_of_bounds(position: i64, file_length: i64) -> bool {
+    if position + BLOCK_SIZE >= file_length || position - BLOCK_SIZE < 0 {
+        return true;
+    }
+    false
 }
