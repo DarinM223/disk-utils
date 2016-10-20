@@ -20,6 +20,7 @@ macro_rules! call_opt {
 #[derive(Clone, Copy)]
 pub enum RecordType {
     Invalid = 0,
+
     Zero = 1,
     Full = 2,
 
@@ -51,18 +52,20 @@ pub struct Record {
 impl Record {
     pub fn read<R: Read>(reader: &mut R) -> io::Result<Record> {
         let mut buf = [0; 7];
-        reader.read(&mut buf)?;
+        if reader.read(&mut buf)? != 7 {
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Unable to read 7 bytes"));
+        }
 
-        let mut rdr = Cursor::new(vec![buf[0], buf[1], buf[2], buf[3]]);
+        let record_type = match RecordType::from_u8(buf[0]) {
+            Some(rt) => rt,
+            None => return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid record type")),
+        };
+
+        let mut rdr = Cursor::new(vec![buf[1], buf[2], buf[3], buf[4]]);
         let crc = rdr.read_u32::<BigEndian>()?;
 
-        rdr = Cursor::new(vec![buf[4], buf[5]]);
+        rdr = Cursor::new(vec![buf[5], buf[6]]);
         let size = rdr.read_u16::<BigEndian>()?;
-
-        let record_type = match RecordType::from_u8(buf[6]) {
-            Some(rt) => rt,
-            None => unimplemented!(), // TODO(DarinM223): handle error
-        };
 
         let mut payload = Vec::with_capacity(size as usize);
         reader.read(&mut payload)?;
@@ -78,6 +81,8 @@ impl Record {
     }
 
     pub fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        let record_type = self.record_type as u8;
+
         let mut wtr = Vec::new();
         wtr.write_u32::<BigEndian>(self.crc)?;
         let (crc1, crc2, crc3, crc4) = (wtr[0], wtr[1], wtr[2], wtr[3]);
@@ -86,9 +91,7 @@ impl Record {
         wtr.write_u16::<BigEndian>(self.size)?;
         let (size1, size2) = (wtr[0], wtr[1]);
 
-        let record_type = self.record_type as u8;
-
-        writer.write(&[crc1, crc2, crc3, crc4, size1, size2, record_type])?;
+        writer.write(&[record_type, crc1, crc2, crc3, crc4, size1, size2])?;
         writer.write(&self.payload)?;
 
         Ok(())
@@ -115,7 +118,7 @@ pub fn read_serializable<S: Serializable>(iter: &mut WalIterator,
     while let Some(mut record) = iter.next() {
         match record.record_type {
             RecordType::Invalid => {
-                // TODO(DarinM223): return error
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid record type"));
             }
             RecordType::Zero | RecordType::Full => {
                 serializable.deserialize(record.payload)?;
@@ -123,21 +126,24 @@ pub fn read_serializable<S: Serializable>(iter: &mut WalIterator,
             }
             RecordType::First => {
                 if state != SerializableState::None {
-                    // TODO(DarinM223): return error
+                    return Err(io::Error::new(io::ErrorKind::InvalidData,
+                                              "Invalid transfer to first state"));
                 }
                 state = SerializableState::First;
                 buf.append(&mut record.payload);
             }
             RecordType::Middle => {
                 if state != SerializableState::First || state != SerializableState::Middle {
-                    // TODO(DarinM223): return error
+                    return Err(io::Error::new(io::ErrorKind::InvalidData,
+                                              "Invalid transfer to middle state"));
                 }
                 state = SerializableState::Middle;
                 buf.append(&mut record.payload);
             }
             RecordType::Last => {
                 if state != SerializableState::Middle {
-                    // TODO(DarinM223): return error
+                    return Err(io::Error::new(io::ErrorKind::InvalidData,
+                                              "Invalid transfer to last state"));
                 }
                 buf.append(&mut record.payload);
                 serializable.deserialize(buf)?;
@@ -184,7 +190,13 @@ impl WalIterator {
         self.file.seek(SeekFrom::Start(position as u64))?;
         let mut buf = [0; BLOCK_SIZE as usize];
         self.file.read_exact(&mut buf)?;
-        // TODO(DarinM223): read records from the bytes
+
+        // Read records from the bytes and add them to the block.
+        let mut block = Vec::new();
+        let mut bytes = &buf[..];
+        while let Ok(record) = Record::read(&mut bytes) {
+            block.push(record);
+        }
         Ok(())
     }
 
