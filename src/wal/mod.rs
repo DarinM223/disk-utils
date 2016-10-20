@@ -1,7 +1,10 @@
+use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
+
 use std::fs;
 use std::fs::File;
 use std::io;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use std::mem;
 use std::path::Path;
 
 /// Calls a method for an object contained inside
@@ -13,14 +16,25 @@ macro_rules! call_opt {
     });
 }
 
-#[derive(Clone)]
+#[repr(u8)]
+#[derive(Clone, Copy)]
 pub enum RecordType {
-    Zero,
-    Full,
+    Invalid = 0,
+    Zero = 1,
+    Full = 2,
 
-    First,
-    Middle,
-    Last,
+    First = 3,
+    Middle = 4,
+    Last = 5,
+}
+
+impl RecordType {
+    pub fn from_u8(i: u8) -> Option<RecordType> {
+        if i >= RecordType::Invalid as u8 && i <= RecordType::Last as u8 {
+            return Some(unsafe { mem::transmute(i) });
+        }
+        None
+    }
 }
 
 /// 32KB Block size.
@@ -35,22 +49,104 @@ pub struct Record {
 }
 
 impl Record {
-    pub fn new<S: Serializable>(data: S) -> io::Result<Record> {
-        unimplemented!()
+    pub fn read<R: Read>(reader: &mut R) -> io::Result<Record> {
+        let mut buf = [0; 7];
+        reader.read(&mut buf)?;
+
+        let mut rdr = Cursor::new(vec![buf[0], buf[1], buf[2], buf[3]]);
+        let crc = rdr.read_u32::<BigEndian>()?;
+
+        rdr = Cursor::new(vec![buf[4], buf[5]]);
+        let size = rdr.read_u16::<BigEndian>()?;
+
+        let record_type = match RecordType::from_u8(buf[6]) {
+            Some(rt) => rt,
+            None => unimplemented!(), // TODO(DarinM223): handle error
+        };
+
+        let mut payload = Vec::with_capacity(size as usize);
+        reader.read(&mut payload)?;
+
+        // TODO(DarinM223): check crc checksum for corruptions
+
+        Ok(Record {
+            crc: crc,
+            size: size,
+            record_type: record_type,
+            payload: payload,
+        })
     }
 
     pub fn write<W: Write>(&self, writer: &mut W) -> io::Result<()> {
-        unimplemented!()
-    }
+        let mut wtr = Vec::new();
+        wtr.write_u32::<BigEndian>(self.crc)?;
+        let (crc1, crc2, crc3, crc4) = (wtr[0], wtr[1], wtr[2], wtr[3]);
 
-    pub fn read<R: Read, S: Serializable>(reader: &mut R) -> io::Result<S> {
-        unimplemented!()
+        wtr = Vec::new();
+        wtr.write_u16::<BigEndian>(self.size)?;
+        let (size1, size2) = (wtr[0], wtr[1]);
+
+        let record_type = self.record_type as u8;
+
+        writer.write(&[crc1, crc2, crc3, crc4, size1, size2, record_type])?;
+        writer.write(&self.payload)?;
+
+        Ok(())
     }
 }
 
 pub trait Serializable {
     fn serialize(&self) -> io::Result<Vec<u8>>;
-    fn deserialize(&mut self, bytes: Vec<u8>) -> Self;
+    fn deserialize(&mut self, bytes: Vec<u8>) -> io::Result<()>;
+}
+
+#[derive(PartialEq)]
+enum SerializableState {
+    None,
+    First,
+    Middle,
+}
+
+pub fn read_serializable<S: Serializable>(iter: &mut WalIterator,
+                                          serializable: &mut S)
+                                          -> io::Result<()> {
+    let mut buf = Vec::new();
+    let mut state = SerializableState::None;
+    while let Some(mut record) = iter.next() {
+        match record.record_type {
+            RecordType::Invalid => {
+                // TODO(DarinM223): return error
+            }
+            RecordType::Zero | RecordType::Full => {
+                serializable.deserialize(record.payload)?;
+                break;
+            }
+            RecordType::First => {
+                if state != SerializableState::None {
+                    // TODO(DarinM223): return error
+                }
+                state = SerializableState::First;
+                buf.append(&mut record.payload);
+            }
+            RecordType::Middle => {
+                if state != SerializableState::First || state != SerializableState::Middle {
+                    // TODO(DarinM223): return error
+                }
+                state = SerializableState::Middle;
+                buf.append(&mut record.payload);
+            }
+            RecordType::Last => {
+                if state != SerializableState::Middle {
+                    // TODO(DarinM223): return error
+                }
+                buf.append(&mut record.payload);
+                serializable.deserialize(buf)?;
+                break;
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Iterator that reads through the write ahead log.
@@ -98,7 +194,7 @@ impl WalIterator {
         if let Some(block_index) = self.block_index {
             let block_len = call_opt!(self.block, len()).unwrap();
             if block_index < 0 {
-                *self.pos.as_mut().unwrap() -= BLOCK_SIZE;
+                self.pos.as_mut().map(|pos| *pos -= BLOCK_SIZE);
 
                 let pos = self.pos.unwrap();
                 if is_out_of_bounds(pos, self.file_len) {
@@ -109,7 +205,7 @@ impl WalIterator {
                 let index = block_len as i32 - 1;
                 self.block_index = Some(index);
             } else if block_index as usize >= block_len {
-                *self.pos.as_mut().unwrap() += BLOCK_SIZE;
+                self.pos.as_mut().map(|pos| *pos += BLOCK_SIZE);
 
                 let pos = self.pos.unwrap();
                 if is_out_of_bounds(pos, self.file_len) {
@@ -144,7 +240,7 @@ impl Iterator for WalIterator {
 
         let block_index = self.block_index.unwrap() as usize;
         let next = call_opt!(self.block, get(block_index)).unwrap().unwrap();
-        *self.block_index.as_mut().unwrap() += 1;
+        self.block_index.as_mut().map(|i| *i += 1);
         Some(next.clone())
     }
 }
@@ -160,7 +256,7 @@ impl DoubleEndedIterator for WalIterator {
 
         let block_index = self.block_index.unwrap() as usize;
         let next = call_opt!(self.block, get(block_index)).unwrap().unwrap();
-        *self.block_index.as_mut().unwrap() += 1;
+        self.block_index.as_mut().map(|i| *i += 1);
         Some(next.clone())
     }
 }
