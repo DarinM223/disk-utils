@@ -27,6 +27,28 @@ impl RecordType {
 /// 32KB Block size.
 pub const BLOCK_SIZE: i64 = 32000;
 
+/// A single entry of the write ahead log stored in blocks.
+///
+/// # Examples
+///
+/// ```
+/// extern crate disk_utils;
+/// use disk_utils::wal::record::{Record, RecordType};
+/// use std::io::{Read, Write};
+///
+/// fn main() {
+///     let record = Record {
+///         crc: 123456789,
+///         size: 12345,
+///         record_type: RecordType::Full,
+///         payload: vec![123; 12345],
+///     };
+///     let mut bytes = Vec::new();
+///     record.write(&mut bytes).unwrap();
+///     let test_record = Record::read(&mut &bytes[..]).unwrap();
+///     assert_eq!(record, test_record);
+/// }
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct Record {
     pub crc: u32,
@@ -38,9 +60,7 @@ pub struct Record {
 impl Record {
     pub fn read<R: Read>(reader: &mut R) -> io::Result<Record> {
         let mut buf = [0; 7];
-        if reader.read(&mut buf)? != 7 {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Unable to read 7 bytes"));
-        }
+        reader.read_exact(&mut buf)?;
 
         let record_type = match RecordType::from_u8(buf[0]) {
             Some(rt) => rt,
@@ -54,9 +74,7 @@ impl Record {
         let size = rdr.read_u16::<BigEndian>()?;
 
         let mut payload = vec![0; size as usize];
-        if reader.read(&mut payload)? != size as usize {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Unable to read data bytes"));
-        }
+        reader.read_exact(&mut payload)?;
 
         // TODO(DarinM223): check crc checksum for corruptions
 
@@ -81,6 +99,7 @@ impl Record {
 
         writer.write(&[record_type, crc1, crc2, crc3, crc4, size1, size2])?;
         writer.write(&self.payload)?;
+        writer.flush()?;
 
         Ok(())
     }
@@ -89,21 +108,40 @@ impl Record {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::fs::OpenOptions;
+    use std::io::{Read, Write, Seek, SeekFrom};
+    use std::panic;
 
     #[test]
-    fn test_read_write_record() {
-        let record = Record {
-            crc: 123456789,
-            size: 12345,
-            record_type: RecordType::Full,
-            payload: vec![123; 12345],
-        };
+    fn test_file_read_write() {
+        let path: &'static str = "./files/record_test";
+        let result = panic::catch_unwind(move || {
+            let record = Record {
+                crc: 123456789,
+                size: 12345,
+                record_type: RecordType::Full,
+                payload: vec![123; 12345],
+            };
 
-        let mut bytes = Vec::new();
-        record.write(&mut bytes).unwrap();
+            let mut file = OpenOptions::new()
+                .read(true)
+                .append(true)
+                .create(true)
+                .open(path)
+                .unwrap();
 
-        let test_record = Record::read(&mut &bytes[..]).unwrap();
-        assert_eq!(record, test_record);
+            record.write(&mut file).unwrap();
+            file.seek(SeekFrom::Start(0)).unwrap();
+
+            let test_record = Record::read(&mut file).unwrap();
+            assert_eq!(record, test_record);
+        });
+
+        fs::remove_file(path).unwrap();
+        if let Err(e) = result {
+            panic!(e);
+        }
     }
 
     #[test]
