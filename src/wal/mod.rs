@@ -1,5 +1,6 @@
 pub mod iterator;
 pub mod record;
+pub mod writer;
 
 use self::iterator::WalIterator;
 use self::record::RecordType;

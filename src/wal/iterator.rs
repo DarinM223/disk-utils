@@ -68,27 +68,27 @@ impl<'a> WalIterator<'a> {
         if let Some(block_index) = self.block_index {
             let block_len = call_opt!(self.block, len()).unwrap();
             if block_index < 0 {
-                self.pos.as_mut().map(|pos| *pos -= BLOCK_SIZE);
-
-                let pos = self.pos.unwrap();
-                if check_forward_bounds(pos, self.file_len) {
-                    return Ok(true);
+                if let Some(mut pos) = self.pos.take() {
+                    pos -= BLOCK_SIZE;
+                    if check_forward_bounds(pos, self.file_len) {
+                        return Ok(true);
+                    }
+                    self.fetch_block(pos)?;
+                    self.pos = Some(pos);
+                    call_opt!(self.block, len()).map(|len| {
+                        self.block_index = Some(len as i32 - 1);
+                    });
                 }
-                self.fetch_block(pos)?;
-
-                call_opt!(self.block, len()).map(|len| {
-                    self.block_index = Some(len as i32 - 1);
-                });
             } else if block_index as usize >= block_len {
-                self.pos.as_mut().map(|pos| *pos += BLOCK_SIZE);
-
-                let pos = self.pos.unwrap();
-                if check_forward_bounds(pos, self.file_len) {
-                    return Ok(true);
+                if let Some(mut pos) = self.pos.take() {
+                    pos += BLOCK_SIZE;
+                    if check_forward_bounds(pos, self.file_len) {
+                        return Ok(true);
+                    }
+                    self.fetch_block(pos)?;
+                    self.pos = Some(pos);
+                    self.block_index = Some(0);
                 }
-                self.fetch_block(pos)?;
-
-                self.block_index = Some(0);
             }
         } else {
             let out_of_bounds = match forward {
@@ -166,11 +166,37 @@ fn check_backward_bounds(position: i64, file_length: i64) -> bool {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::fs::OpenOptions;
+    use std::fs::{File, OpenOptions};
     use std::io::{Seek, SeekFrom};
     use std::panic;
     use super::*;
     use super::super::record::{BLOCK_SIZE, HEADER_SIZE, Record, RecordType};
+
+    fn test_file(file: &mut File, records: Vec<Record>) {
+        // Test going from beginning to end.
+        {
+            let mut count = 0;
+            let iter = WalIterator::new(file).unwrap();
+            for (i, record) in iter.enumerate() {
+                assert_eq!(record, records[i]);
+                count += 1;
+            }
+            assert_eq!(count, 8);
+        }
+
+        file.seek(SeekFrom::Start(0)).unwrap();
+
+        // Test going from end to beginning.
+        {
+            let mut count = 0;
+            let mut iter = WalIterator::new(file).unwrap();
+            while let Some(record) = iter.next_back() {
+                assert_eq!(record, records[records.len() - count - 1]);
+                count += 1;
+            }
+            assert_eq!(count, 8);
+        }
+    }
 
     #[test]
     fn test_perfect_file() {
@@ -205,34 +231,7 @@ mod tests {
             }
             file.seek(SeekFrom::Start(0)).unwrap();
 
-            let mut count = 0;
-
-            // Test going from beginning to end.
-            println!("Forward test");
-            {
-                let iter = WalIterator::new(&mut file).unwrap();
-                for (i, record) in iter.enumerate() {
-                    assert_eq!(record, records[i]);
-                    count += 1;
-                }
-                assert_eq!(count, 8);
-            }
-
-            file.seek(SeekFrom::Start(0)).unwrap();
-            count = 0;
-
-            // Test going from end to beginning.
-            println!("Backwards test");
-            {
-                let mut iter = WalIterator::new(&mut file).unwrap();
-                while let Some(record) = iter.next_back() {
-                    assert_eq!(record, records[records.len() - count - 1]);
-                    count += 1;
-                }
-                assert_eq!(count, 8);
-            }
-
-            // TODO(DarinM223): test going forward and backward.
+            test_file(&mut file, records);
         });
 
         fs::remove_file(path).unwrap();
@@ -243,15 +242,11 @@ mod tests {
 
     #[test]
     fn test_padding_file() {
-        // TODO(DarinM223): test going from beginning to end.
-        // TODO(DarinM223): test going from end to beginning.
-        // TODO(DarinM223): test going forward and backward.
+        // TODO(DarinM223): set up file with padding.
     }
 
     #[test]
     fn test_invalid_file() {
-        // TODO(DarinM223): test going from beginning to end.
-        // TODO(DarinM223): test going from end to beginning.
-        // TODO(DarinM223): test going forward and backward.
+        // TODO(DarinM223): set up invalid file.
     }
 }
