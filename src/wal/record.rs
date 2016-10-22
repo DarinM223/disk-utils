@@ -26,6 +26,8 @@ impl RecordType {
 
 /// 32KB Block size.
 pub const BLOCK_SIZE: i64 = 32000;
+/// 7B Header size for record.
+pub const HEADER_SIZE: usize = 7;
 
 /// A single entry of the write ahead log stored in blocks.
 ///
@@ -43,8 +45,12 @@ pub const BLOCK_SIZE: i64 = 32000;
 ///         record_type: RecordType::Full,
 ///         payload: vec![123; 12345],
 ///     };
+///
+///     // Write record into a byte buffer.
 ///     let mut bytes = Vec::new();
 ///     record.write(&mut bytes).unwrap();
+///
+///     // Read record from the byte buffer.
 ///     let test_record = Record::read(&mut &bytes[..]).unwrap();
 ///     assert_eq!(record, test_record);
 /// }
@@ -59,7 +65,7 @@ pub struct Record {
 
 impl Record {
     pub fn read<R: Read>(reader: &mut R) -> io::Result<Record> {
-        let mut buf = [0; 7];
+        let mut buf = [0; HEADER_SIZE];
         reader.read_exact(&mut buf)?;
 
         let record_type = match RecordType::from_u8(buf[0]) {
@@ -110,7 +116,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::fs::OpenOptions;
-    use std::io::{Read, Write, Seek, SeekFrom};
+    use std::io::{Seek, SeekFrom};
     use std::panic;
 
     #[test]

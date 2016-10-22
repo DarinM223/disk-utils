@@ -2,7 +2,7 @@ pub mod iterator;
 pub mod record;
 
 use self::iterator::WalIterator;
-use self::record::{Record, RecordType};
+use self::record::RecordType;
 
 use std::io;
 

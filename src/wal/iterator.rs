@@ -1,9 +1,7 @@
 use super::record::{BLOCK_SIZE, Record};
-use std::fs;
 use std::fs::File;
 use std::io;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
 
 /// Calls a method for an object contained inside
 /// an option and returns an option of the result.
@@ -15,19 +13,20 @@ macro_rules! call_opt {
 }
 
 /// Iterator that reads through the write ahead log.
-pub struct WalIterator {
-    file: File,
+pub struct WalIterator<'a> {
+    file: &'a mut File,
     file_len: i64,
     block: Option<Vec<Record>>,
     block_index: Option<i32>,
     pos: Option<i64>,
 }
 
-impl WalIterator {
-    pub fn new<P: AsRef<Path> + ?Sized>(path: &P) -> io::Result<WalIterator> {
+impl<'a> WalIterator<'a> {
+    pub fn new<'b>(file: &'b mut File) -> io::Result<WalIterator<'b>> {
+        let file_len = file.metadata()?.len() as i64;
         Ok(WalIterator {
-            file: File::open(path)?,
-            file_len: fs::metadata(path)?.len() as i64,
+            file: file,
+            file_len: file_len,
             block: None,
             block_index: None,
             pos: None,
@@ -77,7 +76,7 @@ impl WalIterator {
                 }
                 self.fetch_block(pos)?;
 
-                let index = call_opt!(self.block, len()).map(|len| {
+                call_opt!(self.block, len()).map(|len| {
                     self.block_index = Some(len as i32 - 1);
                 });
             } else if block_index as usize >= block_len {
@@ -94,25 +93,26 @@ impl WalIterator {
         } else {
             let out_of_bounds = match forward {
                 true => check_forward_bounds(position, self.file_len),
-                false => check_backward_bounds(position),
+                false => check_backward_bounds(position, self.file_len),
             };
             if out_of_bounds {
                 return Ok(true);
             }
             self.fetch_block(position)?;
 
-            let end_index = call_opt!(self.block, len()).unwrap() as i32 - 1;
-            match forward {
-                true => self.block_index = Some(0),
-                false => self.block_index = Some(end_index),
-            }
+            call_opt!(self.block, len()).map(move |len| {
+                match forward {
+                    true => self.block_index = Some(0),
+                    false => self.block_index = Some(len as i32 - 1),
+                }
+            });
         }
 
         Ok(false)
     }
 }
 
-impl Iterator for WalIterator {
+impl<'a> Iterator for WalIterator<'a> {
     type Item = Record;
 
     /// Given the current position, return the record at the position and
@@ -124,14 +124,15 @@ impl Iterator for WalIterator {
             return None;
         }
 
-        let block_index = self.block_index.unwrap() as usize;
-        let next = call_opt!(self.block, get(block_index)).unwrap().unwrap();
-        self.block_index.as_mut().map(|i| *i += 1);
-        Some(next.clone())
+        self.block_index.take().map(|block_index| {
+            let next = call_opt!(self.block, get(block_index as usize)).unwrap().unwrap();
+            self.block_index = Some(block_index + 1);
+            next.clone()
+        })
     }
 }
 
-impl DoubleEndedIterator for WalIterator {
+impl<'a> DoubleEndedIterator for WalIterator<'a> {
     fn next_back(&mut self) -> Option<Record> {
         let end_pos = self.file_len - BLOCK_SIZE;
         let pos = self.get_pos(end_pos);
@@ -140,10 +141,11 @@ impl DoubleEndedIterator for WalIterator {
             return None;
         }
 
-        let block_index = self.block_index.unwrap() as usize;
-        let next = call_opt!(self.block, get(block_index)).unwrap().unwrap();
-        self.block_index.as_mut().map(|i| *i -= 1);
-        Some(next.clone())
+        self.block_index.take().map(|block_index| {
+            let next = call_opt!(self.block, get(block_index as usize)).unwrap().unwrap();
+            self.block_index = Some(block_index - 1);
+            next.clone()
+        })
     }
 }
 
@@ -154,8 +156,8 @@ fn check_forward_bounds(position: i64, file_length: i64) -> bool {
     false
 }
 
-fn check_backward_bounds(position: i64) -> bool {
-    if position - BLOCK_SIZE < 0 {
+fn check_backward_bounds(position: i64, file_length: i64) -> bool {
+    if position - BLOCK_SIZE < 0 || position > file_length {
         return true;
     }
     false
@@ -164,16 +166,16 @@ fn check_backward_bounds(position: i64) -> bool {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::fs::File;
+    use std::fs::OpenOptions;
     use std::io::{Seek, SeekFrom};
     use std::panic;
     use super::*;
-    use super::super::record::{BLOCK_SIZE, Record, RecordType};
+    use super::super::record::{BLOCK_SIZE, HEADER_SIZE, Record, RecordType};
 
     #[test]
     fn test_perfect_file() {
         let record_size = (BLOCK_SIZE / 4) as u16;
-        let payload_size = record_size - 7;
+        let payload_size = record_size - HEADER_SIZE as u16;
         let mut records = Vec::with_capacity(8);
         for i in 0..8 {
             let record_type = match i {
@@ -192,31 +194,43 @@ mod tests {
 
         let path: &'static str = "./files/perfect_file";
         let result = panic::catch_unwind(move || {
-            {
-                let mut file = File::create(path).unwrap();
-                for record in records.iter() {
-                    record.write(&mut file).unwrap();
-                }
+            let mut file = OpenOptions::new()
+                .read(true)
+                .append(true)
+                .create(true)
+                .open(path)
+                .unwrap();
+            for record in records.iter() {
+                record.write(&mut file).unwrap();
             }
+            file.seek(SeekFrom::Start(0)).unwrap();
 
             let mut count = 0;
 
             // Test going from beginning to end.
-            let mut iter = WalIterator::new(path).unwrap();
-            for (i, record) in iter.enumerate() {
-                assert_eq!(record, records[i]);
-                count += 1;
+            println!("Forward test");
+            {
+                let iter = WalIterator::new(&mut file).unwrap();
+                for (i, record) in iter.enumerate() {
+                    assert_eq!(record, records[i]);
+                    count += 1;
+                }
+                assert_eq!(count, 8);
             }
-            assert_eq!(count, 8);
+
+            file.seek(SeekFrom::Start(0)).unwrap();
             count = 0;
 
             // Test going from end to beginning.
-            iter = WalIterator::new(path).unwrap();
-            while let Some(record) = iter.next_back() {
-                assert_eq!(record, records[records.len() - count - 1]);
-                count += 1;
+            println!("Backwards test");
+            {
+                let mut iter = WalIterator::new(&mut file).unwrap();
+                while let Some(record) = iter.next_back() {
+                    assert_eq!(record, records[records.len() - count - 1]);
+                    count += 1;
+                }
+                assert_eq!(count, 8);
             }
-            assert_eq!(count, 8);
 
             // TODO(DarinM223): test going forward and backward.
         });
