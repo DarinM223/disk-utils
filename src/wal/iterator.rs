@@ -1,4 +1,5 @@
 use super::record::{BLOCK_SIZE, Record};
+use std::error::Error;
 use std::fs::File;
 use std::io;
 use std::io::{Read, Seek, SeekFrom};
@@ -47,7 +48,7 @@ impl<'a> WalIterator<'a> {
     fn fetch_block(&mut self, position: i64) -> io::Result<()> {
         self.file.seek(SeekFrom::Start(position as u64))?;
         let mut buf = [0; BLOCK_SIZE as usize];
-        self.file.read_exact(&mut buf)?;
+        self.file.read(&mut buf)?;
 
         // Read records from the bytes and add them to the block.
         let mut block = Vec::new();
@@ -69,10 +70,14 @@ impl<'a> WalIterator<'a> {
             let block_len = call_opt!(self.block, len()).unwrap();
             if block_index < 0 {
                 if let Some(mut pos) = self.pos.take() {
-                    pos -= BLOCK_SIZE;
                     if check_forward_bounds(pos, self.file_len) {
                         return Ok(true);
                     }
+                    pos -= BLOCK_SIZE;
+                    if check_out_of_bounds(pos, self.file_len) {
+                        return Ok(true);
+                    }
+
                     self.fetch_block(pos)?;
                     self.pos = Some(pos);
                     call_opt!(self.block, len()).map(|len| {
@@ -81,10 +86,14 @@ impl<'a> WalIterator<'a> {
                 }
             } else if block_index as usize >= block_len {
                 if let Some(mut pos) = self.pos.take() {
-                    pos += BLOCK_SIZE;
                     if check_forward_bounds(pos, self.file_len) {
                         return Ok(true);
                     }
+                    pos += BLOCK_SIZE;
+                    if check_out_of_bounds(pos, self.file_len) {
+                        return Ok(true);
+                    }
+
                     self.fetch_block(pos)?;
                     self.pos = Some(pos);
                     self.block_index = Some(0);
@@ -119,9 +128,13 @@ impl<'a> Iterator for WalIterator<'a> {
     /// increment into the next record.
     fn next(&mut self) -> Option<Record> {
         let pos = self.get_pos(0);
-        let out_of_bounds = self.load_block(pos, true).unwrap();
-        if out_of_bounds {
-            return None;
+        match self.load_block(pos, true) {
+            Ok(true) => return None,
+            Ok(false) => {}
+            Err(ref e) if e.kind() == io::ErrorKind::NotFound => {
+                return None;
+            }
+            Err(e) => panic!("next() error: {}", e.description()),
         }
 
         self.block_index.take().map(|block_index| {
@@ -134,11 +147,19 @@ impl<'a> Iterator for WalIterator<'a> {
 
 impl<'a> DoubleEndedIterator for WalIterator<'a> {
     fn next_back(&mut self) -> Option<Record> {
-        let end_pos = self.file_len - BLOCK_SIZE;
+        let mut end_pos = (self.file_len / BLOCK_SIZE) * BLOCK_SIZE;
+        if end_pos >= self.file_len {
+            end_pos -= BLOCK_SIZE;
+        }
+
         let pos = self.get_pos(end_pos);
-        let out_of_bounds = self.load_block(pos, false).unwrap();
-        if out_of_bounds {
-            return None;
+        match self.load_block(pos, false) {
+            Ok(true) => return None,
+            Ok(false) => {}
+            Err(ref e) if e.kind() == io::ErrorKind::NotFound => {
+                return None;
+            }
+            Err(e) => panic!("next_back() error: {}", e.description()),
         }
 
         self.block_index.take().map(|block_index| {
@@ -158,6 +179,13 @@ fn check_forward_bounds(position: i64, file_length: i64) -> bool {
 
 fn check_backward_bounds(position: i64, file_length: i64) -> bool {
     if position - BLOCK_SIZE < 0 || position > file_length {
+        return true;
+    }
+    false
+}
+
+fn check_out_of_bounds(position: i64, file_length: i64) -> bool {
+    if position < 0 || position > file_length {
         return true;
     }
     false
@@ -191,6 +219,8 @@ mod tests {
             let mut count = 0;
             let mut iter = WalIterator::new(file).unwrap();
             while let Some(record) = iter.next_back() {
+                assert_eq!(record.payload.len(),
+                           records[records.len() - count - 1].payload.len());
                 assert_eq!(record, records[records.len() - count - 1]);
                 count += 1;
             }
@@ -219,13 +249,13 @@ mod tests {
         }
 
         let path: &'static str = "./files/perfect_file";
+        let mut file = OpenOptions::new()
+            .read(true)
+            .append(true)
+            .create(true)
+            .open(path)
+            .unwrap();
         let result = panic::catch_unwind(move || {
-            let mut file = OpenOptions::new()
-                .read(true)
-                .append(true)
-                .create(true)
-                .open(path)
-                .unwrap();
             for record in records.iter() {
                 record.write(&mut file).unwrap();
             }
