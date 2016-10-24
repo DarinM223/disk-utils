@@ -113,11 +113,12 @@ impl Record {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
     use std::fs::OpenOptions;
     use std::io::{Seek, SeekFrom};
     use std::panic;
+
+    use super::*;
 
     #[test]
     fn test_file_read_write() {

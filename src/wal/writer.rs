@@ -1,7 +1,8 @@
-use super::record::{BLOCK_SIZE, Record};
 use std::fs::File;
 use std::io;
 use std::io::Write;
+
+use wal::record::{BLOCK_SIZE, Record};
 
 pub struct Writer<'a> {
     file: &'a mut File,
@@ -32,9 +33,10 @@ mod tests {
     use std::fs::OpenOptions;
     use std::io::{Read, Seek, SeekFrom};
     use std::panic;
+
     use super::*;
-    use super::super::iterator::WalIterator;
-    use super::super::record::{BLOCK_SIZE, HEADER_SIZE, Record, RecordType};
+    use wal::iterator::WalIterator;
+    use wal::record::{BLOCK_SIZE, HEADER_SIZE, Record, RecordType};
 
     #[test]
     fn test_no_padding_on_same_block() {

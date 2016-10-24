@@ -1,8 +1,9 @@
-use super::record::{BLOCK_SIZE, Record};
 use std::error::Error;
 use std::fs::File;
 use std::io;
 use std::io::{Read, Seek, SeekFrom};
+
+use wal::record::{BLOCK_SIZE, Record};
 
 /// Calls a method for an object contained inside
 /// an option and returns an option of the result.
@@ -197,8 +198,9 @@ mod tests {
     use std::fs::{File, OpenOptions};
     use std::io::{Seek, SeekFrom};
     use std::panic;
+
     use super::*;
-    use super::super::record::{BLOCK_SIZE, HEADER_SIZE, Record, RecordType};
+    use wal::record::{BLOCK_SIZE, HEADER_SIZE, Record, RecordType};
 
     fn test_file(file: &mut File, records: Vec<Record>) {
         // Test going from beginning to end.
