@@ -4,13 +4,14 @@ pub mod undo_log;
 pub mod writer;
 
 use self::iterator::WalIterator;
-use self::record::{Record, RecordType};
+use self::record::RecordType;
 
 use std::io;
+use std::io::{Read, Write};
 
-pub trait Serializable {
-    fn serialize(&self) -> io::Result<Vec<Record>>;
-    fn deserialize(&mut self, records: Vec<Record>) -> io::Result<()>;
+pub trait Serializable: Sized {
+    fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()>;
+    fn deserialize<R: Read>(bytes: &mut R) -> io::Result<Self>;
 }
 
 #[derive(PartialEq)]
@@ -20,16 +21,13 @@ enum SerializableState {
     Middle,
 }
 
-pub fn read_serializable<S: Serializable>(iter: &mut WalIterator,
-                                          serializable: &mut S)
-                                          -> io::Result<()> {
-    let mut records = Vec::new();
+pub fn read_serializable<S: Serializable>(iter: &mut WalIterator) -> io::Result<S> {
+    let mut buf = Vec::new();
     let mut state = SerializableState::None;
-    while let Some(record) = iter.next() {
+    while let Some(mut record) = iter.next() {
         match record.record_type {
             RecordType::Zero | RecordType::Full => {
-                serializable.deserialize(vec![record])?;
-                break;
+                return S::deserialize(&mut &buf[..]);
             }
             RecordType::First => {
                 if state != SerializableState::None {
@@ -37,7 +35,7 @@ pub fn read_serializable<S: Serializable>(iter: &mut WalIterator,
                                               "Invalid transfer to first state"));
                 }
                 state = SerializableState::First;
-                records.push(record);
+                buf.append(&mut record.payload);
             }
             RecordType::Middle => {
                 if state != SerializableState::First || state != SerializableState::Middle {
@@ -45,19 +43,19 @@ pub fn read_serializable<S: Serializable>(iter: &mut WalIterator,
                                               "Invalid transfer to middle state"));
                 }
                 state = SerializableState::Middle;
-                records.push(record);
+                buf.append(&mut record.payload);
             }
             RecordType::Last => {
                 if state != SerializableState::Middle {
                     return Err(io::Error::new(io::ErrorKind::InvalidData,
                                               "Invalid transfer to last state"));
                 }
-                records.push(record);
-                serializable.deserialize(records)?;
-                break;
+                buf.append(&mut record.payload);
+                return S::deserialize(&mut &buf[..]);
             }
         }
     }
 
-    Ok(())
+    Err(io::Error::new(io::ErrorKind::UnexpectedEof,
+                       "Ran out of records before attempting to deserialize"))
 }

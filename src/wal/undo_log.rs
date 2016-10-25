@@ -1,5 +1,8 @@
+use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
+
 use std::fs::{File, OpenOptions};
 use std::io;
+use std::io::{Cursor, Read, Write};
 use std::path::Path;
 use std::result;
 use std::sync::{Arc, Mutex};
@@ -21,22 +24,39 @@ impl From<io::Error> for UndoLogError {
 
 pub type Result<T> = result::Result<T, UndoLogError>;
 
-pub struct ChangeEntry<A: Serializable, B: Serializable> {
-    tid: u64,
-    key: A,
-    old: B,
+pub struct ChangeEntry<A, B> {
+    pub tid: u64,
+    pub key: A,
+    pub old: B,
 }
 
 impl<A, B> Serializable for ChangeEntry<A, B>
     where A: Serializable,
           B: Serializable
 {
-    fn serialize(&self) -> io::Result<Vec<Record>> {
-        unimplemented!()
+    fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()> {
+        let mut wtr = Vec::new();
+        wtr.write_u64::<BigEndian>(self.tid)?;
+        bytes.write(&[wtr[0], wtr[1], wtr[2], wtr[3], wtr[4], wtr[5], wtr[6], wtr[7]])?;
+        self.key.serialize(bytes)?;
+        self.old.serialize(bytes)?;
+
+        Ok(())
     }
 
-    fn deserialize(&mut self, records: Vec<Record>) -> io::Result<()> {
-        unimplemented!()
+    fn deserialize<R: Read>(bytes: &mut R) -> io::Result<ChangeEntry<A, B>> {
+        let mut buf = [0; 8];
+        bytes.read(&mut buf)?;
+        let mut rdr = Cursor::new(vec![buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6],
+                                       buf[7]]);
+        let tid = rdr.read_u64::<BigEndian>()?;
+        let (key, old) = (A::deserialize(bytes)?, B::deserialize(bytes)?);
+
+        Ok(ChangeEntry {
+            tid: tid,
+            key: key,
+            old: old,
+        })
     }
 }
 
@@ -59,18 +79,24 @@ impl UndoLog {
         })
     }
 
-    pub fn write_change<S: Serializable>(&mut self, key: S, val: S) -> Result<()> {
+    pub fn write_change<A: Serializable, B: Serializable>(&mut self, key: A, val: B) -> Result<()> {
         let lock = self.mutex.lock().map_err(|_| UndoLogError::LockError)?;
         let mut writer = Writer::new(&mut self.file);
         let entry = ChangeEntry {
-            tid: 0,
+            tid: 0, // TODO(DarinM223): handle tid.
             key: key,
             old: val,
         };
-        let records = entry.serialize()?;
+        let mut bytes = Vec::new();
+        entry.serialize(&mut bytes)?;
+        let records = split_bytes_into_records(bytes)?;
         for record in records.iter() {
             writer.append(record)?;
         }
         Ok(())
     }
+}
+
+fn split_bytes_into_records(bytes: Vec<u8>) -> io::Result<Vec<Record>> {
+    unimplemented!()
 }
