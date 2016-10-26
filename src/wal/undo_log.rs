@@ -3,12 +3,13 @@ use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::io::{Cursor, Read, Write};
+use std::marker::PhantomData;
 use std::path::Path;
 use std::result;
 use std::sync::{Arc, Mutex};
 
 use wal::Serializable;
-use wal::record::Record;
+use wal::record::{Record, RecordType};
 use wal::writer::Writer;
 
 pub enum UndoLogError {
@@ -60,13 +61,18 @@ impl<A, B> Serializable for ChangeEntry<A, B>
     }
 }
 
-pub struct UndoLog {
+pub struct UndoLog<A, B> {
     file: File,
     mutex: Arc<Mutex<u8>>,
+    a_type: PhantomData<A>,
+    b_type: PhantomData<B>,
 }
 
-impl UndoLog {
-    pub fn new<P: AsRef<Path>>(path: &P) -> Result<UndoLog> {
+impl<A, B> UndoLog<A, B>
+    where A: Serializable,
+          B: Serializable
+{
+    pub fn new<P: AsRef<Path>>(path: &P) -> Result<UndoLog<A, B>> {
         let file = OpenOptions::new()
             .read(true)
             .append(true)
@@ -76,10 +82,12 @@ impl UndoLog {
         Ok(UndoLog {
             file: file,
             mutex: Arc::new(Mutex::new(0)),
+            a_type: PhantomData,
+            b_type: PhantomData,
         })
     }
 
-    pub fn write_change<A: Serializable, B: Serializable>(&mut self, key: A, val: B) -> Result<()> {
+    pub fn write_change(&mut self, key: A, val: B) -> Result<()> {
         let lock = self.mutex.lock().map_err(|_| UndoLogError::LockError)?;
         let mut writer = Writer::new(&mut self.file);
         let entry = ChangeEntry {
@@ -97,6 +105,32 @@ impl UndoLog {
     }
 }
 
+const MAX_RECORD_SIZE: usize = 1024;
+
 fn split_bytes_into_records(bytes: Vec<u8>) -> io::Result<Vec<Record>> {
-    unimplemented!()
+    let mut records: Vec<_> = bytes.chunks(MAX_RECORD_SIZE)
+        .map(|bytes| {
+            Record {
+                crc: 0,
+                size: bytes.len() as u16,
+                record_type: RecordType::Middle,
+                payload: bytes.to_vec(),
+            }
+        })
+        .collect();
+    if records.len() == 1 {
+        records.first_mut().unwrap().record_type = RecordType::Full;
+    } else if records.len() > 1 {
+        records.first_mut().unwrap().record_type = RecordType::First;
+        records.last_mut().unwrap().record_type = RecordType::Last;
+    } else {
+        records.push(Record {
+            crc: 0,
+            size: 0,
+            record_type: RecordType::Zero,
+            payload: vec![],
+        });
+    }
+
+    Ok(records)
 }

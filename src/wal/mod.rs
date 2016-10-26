@@ -3,15 +3,60 @@ pub mod record;
 pub mod undo_log;
 pub mod writer;
 
+use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
+
 use self::iterator::WalIterator;
 use self::record::RecordType;
 
 use std::io;
-use std::io::{Read, Write};
+use std::io::{Cursor, Read, Write};
 
 pub trait Serializable: Sized {
     fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()>;
     fn deserialize<R: Read>(bytes: &mut R) -> io::Result<Self>;
+}
+
+impl Serializable for String {
+    fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()> {
+        let mut wtr = Vec::new();
+        wtr.write_u32::<BigEndian>(self.len() as u32)?;
+        let (l1, l2, l3, l4) = (wtr[0], wtr[1], wtr[2], wtr[3]);
+
+        bytes.write(&[l1, l2, l3, l4])?;
+        bytes.write(self.as_bytes())?;
+        Ok(())
+    }
+
+    fn deserialize<R: Read>(bytes: &mut R) -> io::Result<String> {
+        let mut len_buf = [0; 4];
+        bytes.read(&mut len_buf)?;
+
+        let mut rdr = Cursor::new(vec![len_buf[0], len_buf[1], len_buf[2], len_buf[3]]);
+        let len = rdr.read_u32::<BigEndian>()?;
+
+        let mut str_bytes = vec![0; len as usize];
+        bytes.read(&mut str_bytes)?;
+
+        // TODO(DarinM223): change from io::Result to custom result supporting Utf8Error.
+        Ok(String::from_utf8(str_bytes).expect("Error converting bytes"))
+    }
+}
+
+impl Serializable for i32 {
+    fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()> {
+        let mut wtr = Vec::new();
+        wtr.write_i32::<BigEndian>(*self)?;
+        bytes.write(&[wtr[0], wtr[1], wtr[2], wtr[3]])?;
+        Ok(())
+    }
+
+    fn deserialize<R: Read>(bytes: &mut R) -> io::Result<i32> {
+        let mut buf = [0; 4];
+        bytes.read(&mut buf)?;
+
+        let mut rdr = Cursor::new(vec![buf[0], buf[1], buf[2], buf[3]]);
+        Ok(rdr.read_i32::<BigEndian>()?)
+    }
 }
 
 #[derive(PartialEq)]
