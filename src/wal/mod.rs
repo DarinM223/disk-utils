@@ -1,3 +1,4 @@
+pub mod entries;
 pub mod iterator;
 pub mod record;
 pub mod undo_log;
@@ -6,7 +7,7 @@ pub mod writer;
 use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
 
 use self::iterator::WalIterator;
-use self::record::RecordType;
+use self::record::{Record, RecordType};
 
 use std::io;
 use std::io::{Cursor, Read, Write};
@@ -103,4 +104,32 @@ pub fn read_serializable<S: Serializable>(iter: &mut WalIterator) -> io::Result<
 
     Err(io::Error::new(io::ErrorKind::UnexpectedEof,
                        "Ran out of records before attempting to deserialize"))
+}
+
+pub fn split_bytes_into_records(bytes: Vec<u8>, max_record_size: usize) -> io::Result<Vec<Record>> {
+    let mut records: Vec<_> = bytes.chunks(max_record_size)
+        .map(|bytes| {
+            Record {
+                crc: 0,
+                size: bytes.len() as u16,
+                record_type: RecordType::Middle,
+                payload: bytes.to_vec(),
+            }
+        })
+        .collect();
+    if records.len() == 1 {
+        records.first_mut().unwrap().record_type = RecordType::Full;
+    } else if records.len() > 1 {
+        records.first_mut().unwrap().record_type = RecordType::First;
+        records.last_mut().unwrap().record_type = RecordType::Last;
+    } else {
+        records.push(Record {
+            crc: 0,
+            size: 0,
+            record_type: RecordType::Zero,
+            payload: vec![],
+        });
+    }
+
+    Ok(records)
 }
