@@ -1,6 +1,8 @@
+use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
+
 use std::io;
 use std::io::{Cursor, Read, Write};
-use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
+
 use wal::Serializable;
 
 #[derive(Clone)]
@@ -12,11 +14,40 @@ pub enum Transaction {
 
 impl Serializable for Transaction {
     fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()> {
-        unimplemented!()
+        match *self {
+            Transaction::Start(_) => bytes.write(&[0])?,
+            Transaction::Commit(_) => bytes.write(&[1])?,
+            Transaction::Abort(_) => bytes.write(&[2])?,
+        };
+
+        let tid = match *self {
+            Transaction::Start(tid) => tid,
+            Transaction::Commit(tid) => tid,
+            Transaction::Abort(tid) => tid,
+        };
+
+        let mut tid_bytes = Vec::new();
+        tid_bytes.write_u64::<BigEndian>(tid)?;
+        bytes.write(&tid_bytes)?;
+        Ok(())
     }
 
     fn deserialize<R: Read>(bytes: &mut R) -> io::Result<Transaction> {
-        unimplemented!()
+        let mut transaction_type = [0; 1];
+        bytes.read(&mut transaction_type)?;
+
+        let mut buf = [0; 8];
+        bytes.read(&mut buf)?;
+
+        let mut rdr = Cursor::new(buf[..].to_vec());
+        let tid = rdr.read_u64::<BigEndian>()?;
+
+        match transaction_type[0] {
+            0 => Ok(Transaction::Start(tid)),
+            1 => Ok(Transaction::Commit(tid)),
+            2 => Ok(Transaction::Abort(tid)),
+            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid transaction type")),
+        }
     }
 }
 
@@ -34,7 +65,7 @@ impl<A, B> Serializable for ChangeEntry<A, B>
     fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()> {
         let mut wtr = Vec::new();
         wtr.write_u64::<BigEndian>(self.tid)?;
-        bytes.write(&[wtr[0], wtr[1], wtr[2], wtr[3], wtr[4], wtr[5], wtr[6], wtr[7]])?;
+        bytes.write(&wtr)?;
         self.key.serialize(bytes)?;
         self.old.serialize(bytes)?;
 
@@ -44,8 +75,7 @@ impl<A, B> Serializable for ChangeEntry<A, B>
     fn deserialize<R: Read>(bytes: &mut R) -> io::Result<ChangeEntry<A, B>> {
         let mut buf = [0; 8];
         bytes.read(&mut buf)?;
-        let mut rdr = Cursor::new(vec![buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6],
-                                       buf[7]]);
+        let mut rdr = Cursor::new(buf[..].to_vec());
         let tid = rdr.read_u64::<BigEndian>()?;
         let (key, old) = (A::deserialize(bytes)?, B::deserialize(bytes)?);
 

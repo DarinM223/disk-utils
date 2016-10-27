@@ -73,10 +73,10 @@ impl Record {
             None => return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid record type")),
         };
 
-        let mut rdr = Cursor::new(vec![buf[1], buf[2], buf[3], buf[4]]);
+        let mut rdr = Cursor::new(buf[1..5].to_vec());
         let crc = rdr.read_u32::<BigEndian>()?;
 
-        rdr = Cursor::new(vec![buf[5], buf[6]]);
+        rdr = Cursor::new(buf[5..7].to_vec());
         let size = rdr.read_u16::<BigEndian>()?;
 
         let mut payload = vec![0; size as usize];

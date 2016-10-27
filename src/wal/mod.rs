@@ -19,11 +19,10 @@ pub trait Serializable: Sized {
 
 impl Serializable for String {
     fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()> {
-        let mut wtr = Vec::new();
-        wtr.write_u32::<BigEndian>(self.len() as u32)?;
-        let (l1, l2, l3, l4) = (wtr[0], wtr[1], wtr[2], wtr[3]);
+        let mut len_bytes = Vec::new();
+        len_bytes.write_u32::<BigEndian>(self.len() as u32)?;
 
-        bytes.write(&[l1, l2, l3, l4])?;
+        bytes.write(&len_bytes)?;
         bytes.write(self.as_bytes())?;
         Ok(())
     }
@@ -32,7 +31,7 @@ impl Serializable for String {
         let mut len_buf = [0; 4];
         bytes.read(&mut len_buf)?;
 
-        let mut rdr = Cursor::new(vec![len_buf[0], len_buf[1], len_buf[2], len_buf[3]]);
+        let mut rdr = Cursor::new(len_buf[..].to_vec());
         let len = rdr.read_u32::<BigEndian>()?;
 
         let mut str_bytes = vec![0; len as usize];
@@ -47,7 +46,7 @@ impl Serializable for i32 {
     fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()> {
         let mut wtr = Vec::new();
         wtr.write_i32::<BigEndian>(*self)?;
-        bytes.write(&[wtr[0], wtr[1], wtr[2], wtr[3]])?;
+        bytes.write(&wtr)?;
         Ok(())
     }
 
@@ -55,7 +54,7 @@ impl Serializable for i32 {
         let mut buf = [0; 4];
         bytes.read(&mut buf)?;
 
-        let mut rdr = Cursor::new(vec![buf[0], buf[1], buf[2], buf[3]]);
+        let mut rdr = Cursor::new(buf[..].to_vec());
         Ok(rdr.read_i32::<BigEndian>()?)
     }
 }
