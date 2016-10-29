@@ -3,9 +3,8 @@ use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
 use std::io;
 use std::io::{Cursor, Read, Write};
 
-use wal::Serializable;
+use wal::{LogData, Serializable};
 
-#[derive(Clone)]
 pub enum Transaction {
     Start(u64),
     Commit(u64),
@@ -51,16 +50,14 @@ impl Serializable for Transaction {
     }
 }
 
-#[derive(Clone)]
-pub struct ChangeEntry<A, B> {
+pub struct ChangeEntry<Data: LogData> {
     pub tid: u64,
-    pub key: A,
-    pub old: B,
+    pub key: Data::Key,
+    pub old: Data::Value,
 }
 
-impl<A, B> Serializable for ChangeEntry<A, B>
-    where A: Serializable,
-          B: Serializable
+impl<Data> Serializable for ChangeEntry<Data>
+    where Data: LogData
 {
     fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()> {
         let mut wtr = Vec::new();
@@ -72,12 +69,12 @@ impl<A, B> Serializable for ChangeEntry<A, B>
         Ok(())
     }
 
-    fn deserialize<R: Read>(bytes: &mut R) -> io::Result<ChangeEntry<A, B>> {
+    fn deserialize<R: Read>(bytes: &mut R) -> io::Result<ChangeEntry<Data>> {
         let mut buf = [0; 8];
         bytes.read(&mut buf)?;
         let mut rdr = Cursor::new(buf[..].to_vec());
         let tid = rdr.read_u64::<BigEndian>()?;
-        let (key, old) = (A::deserialize(bytes)?, B::deserialize(bytes)?);
+        let (key, old) = (Data::Key::deserialize(bytes)?, Data::Value::deserialize(bytes)?);
 
         Ok(ChangeEntry {
             tid: tid,

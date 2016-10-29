@@ -59,6 +59,11 @@ impl Serializable for i32 {
     }
 }
 
+pub trait LogData {
+    type Key: Serializable;
+    type Value: Serializable;
+}
+
 #[derive(PartialEq)]
 enum SerializableState {
     None,
@@ -97,6 +102,46 @@ pub fn read_serializable<S: Serializable>(iter: &mut WalIterator) -> io::Result<
                 }
                 buf.append(&mut record.payload);
                 return S::deserialize(&mut &buf[..]);
+            }
+        }
+    }
+
+    Err(io::Error::new(io::ErrorKind::UnexpectedEof,
+                       "Ran out of records before attempting to deserialize"))
+}
+
+pub fn read_serializable_backwards<S: Serializable>(iter: &mut WalIterator) -> io::Result<S> {
+    let mut buf = Vec::new();
+    let mut state = SerializableState::None;
+    while let Some(mut record) = iter.next_back() {
+        match record.record_type {
+            RecordType::Zero | RecordType::Full => {
+                return S::deserialize(&mut &buf[..]);
+            }
+            RecordType::First => {
+                if state != SerializableState::Middle {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData,
+                                              "Invalid transfer to last state"));
+                }
+                buf.append(&mut record.payload);
+                buf.reverse();
+                return S::deserialize(&mut &buf[..]);
+            }
+            RecordType::Middle => {
+                if state != SerializableState::First || state != SerializableState::Middle {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData,
+                                              "Invalid transfer to middle state"));
+                }
+                state = SerializableState::Middle;
+                buf.append(&mut record.payload);
+            }
+            RecordType::Last => {
+                if state != SerializableState::None {
+                    return Err(io::Error::new(io::ErrorKind::InvalidData,
+                                              "Invalid transfer to first state"));
+                }
+                state = SerializableState::First;
+                buf.append(&mut record.payload);
             }
         }
     }
