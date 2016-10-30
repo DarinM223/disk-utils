@@ -9,6 +9,8 @@ use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
 use self::iterator::WalIterator;
 use self::record::{Record, RecordType};
 
+use std::fmt::Debug;
+use std::hash::Hash;
 use std::io;
 use std::io::{Cursor, Read, Write};
 
@@ -59,9 +61,9 @@ impl Serializable for i32 {
     }
 }
 
-pub trait LogData {
-    type Key: Serializable;
-    type Value: Serializable;
+pub trait LogData: PartialEq + Debug {
+    type Key: Serializable + PartialEq + Debug + Hash;
+    type Value: Serializable + PartialEq + Debug;
 }
 
 #[derive(PartialEq)]
@@ -88,7 +90,7 @@ pub fn read_serializable<S: Serializable>(iter: &mut WalIterator) -> io::Result<
                 buf.append(&mut record.payload);
             }
             RecordType::Middle => {
-                if state != SerializableState::First || state != SerializableState::Middle {
+                if state != SerializableState::First && state != SerializableState::Middle {
                     return Err(io::Error::new(io::ErrorKind::InvalidData,
                                               "Invalid transfer to middle state"));
                 }
@@ -123,16 +125,18 @@ pub fn read_serializable_backwards<S: Serializable>(iter: &mut WalIterator) -> i
                     return Err(io::Error::new(io::ErrorKind::InvalidData,
                                               "Invalid transfer to last state"));
                 }
+                record.payload.reverse();
                 buf.append(&mut record.payload);
                 buf.reverse();
                 return S::deserialize(&mut &buf[..]);
             }
             RecordType::Middle => {
-                if state != SerializableState::First || state != SerializableState::Middle {
+                if state != SerializableState::First && state != SerializableState::Middle {
                     return Err(io::Error::new(io::ErrorKind::InvalidData,
                                               "Invalid transfer to middle state"));
                 }
                 state = SerializableState::Middle;
+                record.payload.reverse();
                 buf.append(&mut record.payload);
             }
             RecordType::Last => {
@@ -141,6 +145,7 @@ pub fn read_serializable_backwards<S: Serializable>(iter: &mut WalIterator) -> i
                                               "Invalid transfer to first state"));
                 }
                 state = SerializableState::First;
+                record.payload.reverse();
                 buf.append(&mut record.payload);
             }
         }
@@ -154,7 +159,7 @@ pub fn split_bytes_into_records(bytes: Vec<u8>, max_record_size: usize) -> io::R
     let mut records: Vec<_> = bytes.chunks(max_record_size)
         .map(|bytes| {
             Record {
-                crc: 0,
+                crc: 0, // TODO(DarinM223): handle crc.
                 size: bytes.len() as u16,
                 record_type: RecordType::Middle,
                 payload: bytes.to_vec(),
@@ -176,4 +181,100 @@ pub fn split_bytes_into_records(bytes: Vec<u8>, max_record_size: usize) -> io::R
     }
 
     Ok(records)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::fs::OpenOptions;
+    use std::io::{Seek, SeekFrom};
+    use std::panic;
+    use super::*;
+    use wal::entries::ChangeEntry;
+    use wal::iterator::WalIterator;
+    use wal::record::RecordType;
+    use wal::writer::Writer;
+
+    #[derive(PartialEq, Debug)]
+    struct MyLogData;
+
+    impl LogData for MyLogData {
+        type Key = i32;
+        type Value = String;
+    }
+
+    #[test]
+    fn test_split_bytes() {
+        let entry: ChangeEntry<MyLogData> = ChangeEntry {
+            tid: 123,
+            key: 20,
+            old: "Hello world".to_string(),
+        };
+
+        let mut bytes = Vec::new();
+        entry.serialize(&mut bytes).unwrap();
+        let mut records = split_bytes_into_records(bytes.clone(), 2).unwrap();
+
+        assert_eq!(records[0].record_type, RecordType::First);
+        for i in 1..(records.len() - 1) {
+            assert_eq!(records[i].record_type, RecordType::Middle);
+        }
+        assert_eq!(records[records.len() - 1].record_type, RecordType::Last);
+
+        let mut buf = Vec::new();
+        for record in records.iter_mut() {
+            buf.append(&mut record.payload);
+        }
+
+        for (b1, b2) in bytes.iter().zip(buf.iter()) {
+            assert_eq!(b1, b2);
+        }
+    }
+
+    #[test]
+    fn test_read_serializable() {
+        let entry = ChangeEntry {
+            tid: 123,
+            key: 20,
+            old: "Hello world".to_string(),
+        };
+
+        let mut bytes = Vec::new();
+        entry.serialize(&mut bytes).unwrap();
+        let records = split_bytes_into_records(bytes, 1).unwrap();
+
+        let path: &'static str = "./files/read_serializable_test";
+        let mut file = OpenOptions::new()
+            .read(true)
+            .append(true)
+            .create(true)
+            .open(path)
+            .unwrap();
+        let result = panic::catch_unwind(move || {
+            {
+                let mut writer = Writer::new(&mut file);
+                for record in records.iter() {
+                    writer.append(record).unwrap();
+                }
+            }
+
+            file.seek(SeekFrom::Start(0)).unwrap();
+
+            {
+                let mut iter = WalIterator::new(&mut file).unwrap();
+                let result_entry = read_serializable::<ChangeEntry<MyLogData>>(&mut iter).unwrap();
+                assert_eq!(entry, result_entry);
+            }
+            {
+                let mut iter = WalIterator::new(&mut file).unwrap();
+                let result_entry = read_serializable_backwards::<ChangeEntry<MyLogData>>(&mut iter)
+                    .unwrap();
+                assert_eq!(entry, result_entry);
+            }
+        });
+        fs::remove_file(path).unwrap();
+        if let Err(e) = result {
+            panic!(e);
+        }
+    }
 }

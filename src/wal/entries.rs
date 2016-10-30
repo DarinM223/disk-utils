@@ -50,6 +50,7 @@ impl Serializable for Transaction {
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub struct ChangeEntry<Data: LogData> {
     pub tid: u64,
     pub key: Data::Key,
@@ -81,5 +82,34 @@ impl<Data> Serializable for ChangeEntry<Data>
             key: key,
             old: old,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wal::{LogData, Serializable};
+
+    #[derive(PartialEq, Debug)]
+    struct MyLogData;
+
+    impl LogData for MyLogData {
+        type Key = i32;
+        type Value = String;
+    }
+
+    #[test]
+    fn test_change_entry() {
+        let entry: ChangeEntry<MyLogData> = ChangeEntry {
+            tid: 123,
+            key: 20,
+            old: "Hello world!".to_string(),
+        };
+
+        let mut bytes = Vec::new();
+        entry.serialize(&mut bytes).unwrap();
+
+        let test_entry = ChangeEntry::deserialize(&mut &bytes[..]).unwrap();
+        assert_eq!(entry, test_entry);
     }
 }

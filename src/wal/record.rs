@@ -152,6 +152,22 @@ mod tests {
     }
 
     #[test]
+    fn test_single_byte_read_write() {
+        let record = Record {
+            crc: 123456789,
+            size: 1,
+            record_type: RecordType::Full,
+            payload: vec![0],
+        };
+
+        let mut bytes = Vec::new();
+        record.write(&mut bytes).unwrap();
+
+        let test_record = Record::read(&mut &bytes[..]).unwrap();
+        assert_eq!(record, test_record);
+    }
+
+    #[test]
     fn test_read_write_invalid_record() {
         let mut bytes = vec![0; 100];
         if let Ok(_) = Record::read(&mut &bytes[..]) {

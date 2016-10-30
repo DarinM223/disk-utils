@@ -170,4 +170,56 @@ mod tests {
             panic!(e);
         }
     }
+
+    #[test]
+    fn test_single_bytes() {
+        let num_records = BLOCK_SIZE * 2;
+        let mut records = Vec::with_capacity(num_records as usize);
+        for i in 0..num_records {
+            let record_type = match i {
+                0 => RecordType::First,
+                pos if pos == num_records - 1 => RecordType::Last,
+                _ => RecordType::Middle,
+            };
+
+            records.push(Record {
+                crc: 0,
+                size: 1,
+                record_type: record_type,
+                payload: vec![0],
+            });
+        }
+
+        let path: &'static str = "./files/single_byte_test";
+        let mut file = OpenOptions::new()
+            .read(true)
+            .append(true)
+            .create(true)
+            .open(path)
+            .unwrap();
+        let result = panic::catch_unwind(move || {
+            {
+                let mut writer = Writer::new(&mut file);
+                for record in records.iter() {
+                    writer.append(record).unwrap();
+                }
+            }
+
+            file.seek(SeekFrom::Start(0)).unwrap();
+
+            {
+                let mut count = 0;
+                let iter = WalIterator::new(&mut file).unwrap();
+                for (i, record) in iter.enumerate() {
+                    assert_eq!(record, records[i]);
+                    count += 1;
+                }
+                assert_eq!(count, num_records);
+            }
+        });
+        fs::remove_file(path).unwrap();
+        if let Err(e) = result {
+            panic!(e);
+        }
+    }
 }

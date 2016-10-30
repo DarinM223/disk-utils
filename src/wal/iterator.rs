@@ -101,11 +101,7 @@ impl<'a> WalIterator<'a> {
                 }
             }
         } else {
-            let out_of_bounds = match forward {
-                true => check_forward_bounds(position, self.file_len),
-                false => check_backward_bounds(position, self.file_len),
-            };
-            if out_of_bounds {
+            if check_out_of_bounds(position, self.file_len) {
                 return Ok(true);
             }
             self.fetch_block(position)?;
@@ -178,13 +174,6 @@ fn check_forward_bounds(position: i64, file_length: i64) -> bool {
     false
 }
 
-fn check_backward_bounds(position: i64, file_length: i64) -> bool {
-    if position - BLOCK_SIZE < 0 || position > file_length {
-        return true;
-    }
-    false
-}
-
 fn check_out_of_bounds(position: i64, file_length: i64) -> bool {
     if position < 0 || position > file_length {
         return true;
@@ -211,7 +200,7 @@ mod tests {
                 assert_eq!(record, records[i]);
                 count += 1;
             }
-            assert_eq!(count, 8);
+            assert_eq!(count, records.len());
         }
 
         file.seek(SeekFrom::Start(0)).unwrap();
@@ -226,7 +215,36 @@ mod tests {
                 assert_eq!(record, records[records.len() - count - 1]);
                 count += 1;
             }
-            assert_eq!(count, 8);
+            assert_eq!(count, records.len());
+        }
+    }
+
+    #[test]
+    fn test_small_file() {
+        let record = Record {
+            crc: 123456789,
+            size: 1,
+            record_type: RecordType::Full,
+            payload: vec![0],
+        };
+
+        let path: &'static str = "./files/small_file";
+        let mut file = OpenOptions::new()
+            .read(true)
+            .append(true)
+            .create(true)
+            .open(path)
+            .unwrap();
+        let result = panic::catch_unwind(move || {
+            record.write(&mut file).unwrap();
+            file.seek(SeekFrom::Start(0)).unwrap();
+
+            test_file(&mut file, vec![record]);
+        });
+
+        fs::remove_file(path).unwrap();
+        if let Err(e) = result {
+            panic!(e);
         }
     }
 
