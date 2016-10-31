@@ -62,8 +62,8 @@ impl Serializable for i32 {
 }
 
 pub trait LogData: PartialEq + Debug {
-    type Key: Serializable + PartialEq + Debug + Hash;
-    type Value: Serializable + PartialEq + Debug;
+    type Key: Clone + PartialEq + Eq + Debug + Hash + Serializable;
+    type Value: Clone + PartialEq + Debug + Serializable;
 }
 
 #[derive(PartialEq)]
@@ -79,7 +79,7 @@ pub fn read_serializable<S: Serializable>(iter: &mut WalIterator) -> io::Result<
     while let Some(mut record) = iter.next() {
         match record.record_type {
             RecordType::Zero | RecordType::Full => {
-                return S::deserialize(&mut &buf[..]);
+                return S::deserialize(&mut &record.payload[..]);
             }
             RecordType::First => {
                 if state != SerializableState::None {
