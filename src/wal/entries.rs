@@ -55,7 +55,6 @@ impl Serializable for Transaction {
 pub struct InsertEntry<Data: LogData> {
     pub tid: u64,
     pub key: Data::Key,
-    pub value: Data::Value,
 }
 
 impl<Data> Serializable for InsertEntry<Data>
@@ -66,7 +65,6 @@ impl<Data> Serializable for InsertEntry<Data>
         wtr.write_u64::<BigEndian>(self.tid)?;
         bytes.write(&wtr)?;
         self.key.serialize(bytes)?;
-        self.value.serialize(bytes)?;
 
         Ok(())
     }
@@ -76,12 +74,11 @@ impl<Data> Serializable for InsertEntry<Data>
         bytes.read(&mut buf)?;
         let mut rdr = Cursor::new(buf[..].to_vec());
         let tid = rdr.read_u64::<BigEndian>()?;
-        let (key, value) = (Data::Key::deserialize(bytes)?, Data::Value::deserialize(bytes)?);
+        let key = Data::Key::deserialize(bytes)?;
 
         Ok(InsertEntry {
             tid: tid,
             key: key,
-            value: value,
         })
     }
 }
@@ -139,7 +136,6 @@ mod tests {
         let entry: InsertEntry<MyLogData> = InsertEntry {
             tid: 123,
             key: 20,
-            value: "Hello world!".to_string(),
         };
 
         let mut bytes = Vec::new();

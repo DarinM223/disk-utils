@@ -3,27 +3,12 @@ use std::fs::{File, OpenOptions};
 use std::io;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::result;
 use std::sync::{Arc, Mutex, RwLock};
 
-use wal::{LogData, read_serializable_backwards, Serializable, split_bytes_into_records};
+use wal::{LogData, read_serializable_backwards, Result, Serializable, split_bytes_into_records};
 use wal::entries::{ChangeEntry, InsertEntry, Transaction};
 use wal::iterator::WalIterator;
 use wal::writer::Writer;
-
-#[derive(Debug)]
-pub enum UndoLogError {
-    IoError(io::Error),
-    LockError,
-}
-
-impl From<io::Error> for UndoLogError {
-    fn from(err: io::Error) -> UndoLogError {
-        UndoLogError::IoError(err)
-    }
-}
-
-pub type Result<T> = result::Result<T, UndoLogError>;
 
 #[derive(Debug, PartialEq)]
 pub enum UndoLogEntry<Data: LogData> {
@@ -125,7 +110,7 @@ impl<Data, Store> UndoLog<Data, Store>
         let mut unfinished_transactions = HashSet::new();
 
         {
-            let mut file = self.file.lock().map_err(|_| UndoLogError::LockError)?;
+            let mut file = self.file.lock()?;
             let mut iter = WalIterator::new(&mut file)?;
 
             while let Ok(data) = read_serializable_backwards::<UndoLogEntry<Data>>(&mut iter) {
@@ -154,7 +139,7 @@ impl<Data, Store> UndoLog<Data, Store>
         }
 
         {
-            let mut log = self.mem_log.lock().map_err(|_| UndoLogError::LockError)?;
+            let mut log = self.mem_log.lock()?;
             let mut max_tid = None;
             for unfinished_tid in unfinished_transactions {
                 log.push_back(UndoLogEntry::Transaction(Transaction::Abort(unfinished_tid)));
@@ -168,8 +153,7 @@ impl<Data, Store> UndoLog<Data, Store>
 
             // Set the tid to the largest aborted tid.
             if let Some(max_tid) = max_tid {
-                let mut tid = self.tid.write().map_err(|_| UndoLogError::LockError)?;
-                *tid = max_tid;
+                *self.tid.write()? = max_tid;
             }
         }
 
@@ -178,9 +162,9 @@ impl<Data, Store> UndoLog<Data, Store>
     }
 
     pub fn flush(&mut self) -> Result<()> {
-        let mut file = self.file.lock().map_err(|_| UndoLogError::LockError)?;
+        let mut file = self.file.lock()?;
         let mut writer = Writer::new(&mut file);
-        let mut log = self.mem_log.lock().map_err(|_| UndoLogError::LockError)?;
+        let mut log = self.mem_log.lock()?;
         for entry in log.iter_mut() {
             let mut bytes = Vec::new();
             entry.serialize(&mut bytes)?;
@@ -195,15 +179,13 @@ impl<Data, Store> UndoLog<Data, Store>
     }
 
     pub fn start(&mut self) -> Result<()> {
-        let tid = self.tid.read().map_err(|_| UndoLogError::LockError)?;
-        let entry = UndoLogEntry::Transaction(Transaction::Start(*tid + 1));
-        let mut log = self.mem_log.lock().map_err(|_| UndoLogError::LockError)?;
-        log.push_back(entry);
+        let entry = UndoLogEntry::Transaction(Transaction::Start(*self.tid.read()? + 1));
+        self.mem_log.lock()?.push_back(entry);
         Ok(())
     }
 
     pub fn write(&mut self, key: Data::Key, val: Data::Value) -> Result<()> {
-        let tid = self.tid.read().map_err(|_| UndoLogError::LockError)?;
+        let tid = self.tid.read()?;
         let entry = if let Some(old_value) = self.store.get(&key) {
             UndoLogEntry::ChangeEntry(ChangeEntry {
                 tid: *tid + 1,
@@ -214,13 +196,10 @@ impl<Data, Store> UndoLog<Data, Store>
             UndoLogEntry::InsertEntry(InsertEntry {
                 tid: *tid + 1,
                 key: key.clone(),
-                value: val.clone(),
             })
         };
         self.store.update(key, val);
-
-        let mut log = self.mem_log.lock().map_err(|_| UndoLogError::LockError)?;
-        log.push_back(entry);
+        self.mem_log.lock()?.push_back(entry);
 
         Ok(())
     }
@@ -230,29 +209,25 @@ impl<Data, Store> UndoLog<Data, Store>
         self.store.flush()?;
 
         {
-            let tid = self.tid.read().map_err(|_| UndoLogError::LockError)?;
+            let tid = self.tid.read()?;
             let entry = UndoLogEntry::Transaction(Transaction::Commit(*tid + 1));
-            let mut log = self.mem_log.lock().map_err(|_| UndoLogError::LockError)?;
-            log.push_back(entry);
+            self.mem_log.lock()?.push_back(entry);
         }
 
         self.flush()?;
-        let mut tid = self.tid.write().map_err(|_| UndoLogError::LockError)?;
-        *tid += 1;
+        *self.tid.write()? += 1;
         Ok(())
     }
 
     pub fn abort(&mut self) -> Result<()> {
         {
-            let tid = self.tid.read().map_err(|_| UndoLogError::LockError)?;
+            let tid = self.tid.read()?;
             let entry = UndoLogEntry::Transaction(Transaction::Abort(*tid + 1));
-            let mut log = self.mem_log.lock().map_err(|_| UndoLogError::LockError)?;
-            log.push_back(entry);
+            self.mem_log.lock()?.push_back(entry);
         }
 
         self.flush()?;
-        let mut tid = self.tid.write().map_err(|_| UndoLogError::LockError)?;
-        *tid += 1;
+        *self.tid.write()? += 1;
         Ok(())
     }
 }
@@ -366,11 +341,7 @@ mod tests {
 
             assert_eq!(undo_log.mem_log.lock().unwrap().len(), 2);
             assert_eq!(undo_log.mem_log.lock().unwrap()[1],
-                       UndoLogEntry::InsertEntry(InsertEntry {
-                           tid: 1,
-                           key: 20,
-                           value: "Hello".to_string(),
-                       }));
+                       UndoLogEntry::InsertEntry(InsertEntry { tid: 1, key: 20 }));
 
             undo_log.write(20, "World".to_string()).unwrap();
 
@@ -401,19 +372,16 @@ mod tests {
 
             assert_eq!(*undo_log.tid.read().unwrap(), 1);
 
-            let mut expected_entries = vec![UndoLogEntry::Transaction(Transaction::Start(1)),
-                                            UndoLogEntry::InsertEntry(InsertEntry {
-                                                tid: 1,
-                                                key: 20,
-                                                value: "Hello".to_string(),
-                                            }),
-                                            UndoLogEntry::ChangeEntry(ChangeEntry {
-                                                tid: 1,
-                                                key: 20,
-                                                old: "Hello".to_string(),
-                                            }),
-                                            UndoLogEntry::Transaction(Transaction::Commit(1))]
-                .into_iter();
+            let mut expected_entries =
+                vec![UndoLogEntry::Transaction(Transaction::Start(1)),
+                     UndoLogEntry::InsertEntry(InsertEntry { tid: 1, key: 20 }),
+                     UndoLogEntry::ChangeEntry(ChangeEntry {
+                         tid: 1,
+                         key: 20,
+                         old: "Hello".to_string(),
+                     }),
+                     UndoLogEntry::Transaction(Transaction::Commit(1))]
+                    .into_iter();
 
             let mut file = OpenOptions::new()
                 .read(true)
@@ -455,26 +423,19 @@ mod tests {
             let undo_log = UndoLog::new(path, store.clone()).unwrap();
             assert_eq!(*undo_log.tid.read().unwrap(), 2);
 
-            let mut expected_entries = vec![UndoLogEntry::Transaction(Transaction::Start(1)),
-                                            UndoLogEntry::InsertEntry(InsertEntry {
-                                                tid: 1,
-                                                key: 20,
-                                                value: "Hello".to_string(),
-                                            }),
-                                            UndoLogEntry::Transaction(Transaction::Commit(1)),
-                                            UndoLogEntry::Transaction(Transaction::Start(2)),
-                                            UndoLogEntry::ChangeEntry(ChangeEntry {
-                                                tid: 2,
-                                                key: 20,
-                                                old: "Hello".to_string(),
-                                            }),
-                                            UndoLogEntry::InsertEntry(InsertEntry {
-                                                tid: 2,
-                                                key: 30,
-                                                value: "Hello".to_string(),
-                                            }),
-                                            UndoLogEntry::Transaction(Transaction::Abort(2))]
-                .into_iter();
+            let mut expected_entries =
+                vec![UndoLogEntry::Transaction(Transaction::Start(1)),
+                     UndoLogEntry::InsertEntry(InsertEntry { tid: 1, key: 20 }),
+                     UndoLogEntry::Transaction(Transaction::Commit(1)),
+                     UndoLogEntry::Transaction(Transaction::Start(2)),
+                     UndoLogEntry::ChangeEntry(ChangeEntry {
+                         tid: 2,
+                         key: 20,
+                         old: "Hello".to_string(),
+                     }),
+                     UndoLogEntry::InsertEntry(InsertEntry { tid: 2, key: 30 }),
+                     UndoLogEntry::Transaction(Transaction::Abort(2))]
+                    .into_iter();
             let mut file = OpenOptions::new()
                 .read(true)
                 .append(true)

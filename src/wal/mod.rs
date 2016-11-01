@@ -13,6 +13,28 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::io;
 use std::io::{Cursor, Read, Write};
+use std::result;
+use std::sync::PoisonError;
+
+#[derive(Debug)]
+pub enum LogError {
+    IoError(io::Error),
+    LockError,
+}
+
+impl From<io::Error> for LogError {
+    fn from(err: io::Error) -> LogError {
+        LogError::IoError(err)
+    }
+}
+
+impl<T> From<PoisonError<T>> for LogError {
+    fn from(_: PoisonError<T>) -> LogError {
+        LogError::LockError
+    }
+}
+
+pub type Result<T> = result::Result<T, LogError>;
 
 pub trait Serializable: Sized {
     fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()>;
