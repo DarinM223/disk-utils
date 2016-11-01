@@ -96,17 +96,13 @@ impl<Data, Store> UndoLog<Data, Store>
 
         // Do a backwards pass over the file.
         // If last record is not a COMMIT or ABORT, then start recovery.
-        // Otherwise, get last tid from that record or 0 if file is empty.
         {
             let mut iter = WalIterator::new(&mut file)?;
             if let Ok(data) = read_serializable_backwards::<UndoLogEntry<Data>>(&mut iter) {
                 match data {
                     UndoLogEntry::Transaction(Transaction::Commit(id)) => tid = id,
                     UndoLogEntry::Transaction(Transaction::Abort(id)) => tid = id,
-                    _ => {
-                        recover = true;
-                        tid = find_last_tid::<Data>(&mut iter);
-                    }
+                    _ => recover = true,
                 }
             }
         }
@@ -159,8 +155,21 @@ impl<Data, Store> UndoLog<Data, Store>
 
         {
             let mut log = self.mem_log.lock().map_err(|_| UndoLogError::LockError)?;
-            for tid in unfinished_transactions {
-                log.push_back(UndoLogEntry::Transaction(Transaction::Abort(tid)));
+            let mut max_tid = None;
+            for unfinished_tid in unfinished_transactions {
+                log.push_back(UndoLogEntry::Transaction(Transaction::Abort(unfinished_tid)));
+
+                match max_tid {
+                    Some(tid) if unfinished_tid > tid => max_tid = Some(unfinished_tid),
+                    None => max_tid = Some(unfinished_tid),
+                    _ => {}
+                }
+            }
+
+            // Set the tid to the largest aborted tid.
+            if let Some(max_tid) = max_tid {
+                let mut tid = self.tid.write().map_err(|_| UndoLogError::LockError)?;
+                *tid = max_tid;
             }
         }
 
@@ -248,18 +257,6 @@ impl<Data, Store> UndoLog<Data, Store>
     }
 }
 
-fn find_last_tid<Data: LogData>(iter: &mut WalIterator) -> u64 {
-    while let Ok(data) = read_serializable_backwards::<UndoLogEntry<Data>>(iter) {
-        match data {
-            UndoLogEntry::Transaction(Transaction::Commit(id)) => return id,
-            UndoLogEntry::Transaction(Transaction::Abort(id)) => return id,
-            _ => {}
-        }
-    }
-
-    0
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -267,12 +264,13 @@ mod tests {
     use std::fs::OpenOptions;
     use std::io;
     use std::panic;
+    use std::sync::{Arc, RwLock};
     use super::*;
     use wal::entries::{ChangeEntry, InsertEntry, Transaction};
     use wal::iterator::WalIterator;
     use wal::{LogData, read_serializable};
 
-    #[derive(PartialEq, Debug)]
+    #[derive(Clone, PartialEq, Debug)]
     struct MyLogData;
 
     impl LogData for MyLogData {
@@ -280,9 +278,10 @@ mod tests {
         type Value = String;
     }
 
+    #[derive(Clone)]
     struct MyStore<Data: LogData> {
-        map: HashMap<Data::Key, Data::Value>,
-        flush_err: bool,
+        map: Arc<RwLock<HashMap<Data::Key, Data::Value>>>,
+        flush_err: Arc<RwLock<bool>>,
     }
 
     impl<Data> MyStore<Data>
@@ -290,13 +289,13 @@ mod tests {
     {
         pub fn new() -> MyStore<Data> {
             MyStore {
-                map: HashMap::new(),
-                flush_err: false,
+                map: Arc::new(RwLock::new(HashMap::new())),
+                flush_err: Arc::new(RwLock::new(false)),
             }
         }
 
         pub fn set_flush_err(&mut self, flush_err: bool) {
-            self.flush_err = flush_err;
+            *self.flush_err.write().unwrap() = flush_err;
         }
     }
 
@@ -304,19 +303,19 @@ mod tests {
         where Data: LogData
     {
         fn get(&self, key: &Data::Key) -> Option<Data::Value> {
-            self.map.get(key).cloned()
+            self.map.read().unwrap().get(key).cloned()
         }
 
         fn remove(&mut self, key: &Data::Key) {
-            self.map.remove(key);
+            self.map.write().unwrap().remove(key);
         }
 
         fn update(&mut self, key: Data::Key, val: Data::Value) {
-            self.map.insert(key, val);
+            self.map.write().unwrap().insert(key, val);
         }
 
         fn flush(&mut self) -> io::Result<()> {
-            if self.flush_err {
+            if *self.flush_err.read().unwrap() {
                 Err(io::Error::new(io::ErrorKind::Interrupted, "Flush error occurred"))
             } else {
                 Ok(())
@@ -435,11 +434,64 @@ mod tests {
 
     #[test]
     fn test_recover() {
-        // TODO(DarinM223): set flush_err to true.
-        // TODO(DarinM223): make changes and commit.
-        // TODO(DarinM223): verify that commit failed.
-        // TODO(DarinM223): run recovery.
-        // TODO(DarinM223): check that the log file is consistent with what it
-        // should be after recovery.
+        let path = "./files/recover_undo_log";
+        let mut store: MyStore<MyLogData> = MyStore::new();
+        let result = panic::catch_unwind(move || {
+            {
+                let mut undo_log = UndoLog::new(path, store.clone()).unwrap();
+                undo_log.start().unwrap();
+                undo_log.write(20, "Hello".to_string()).unwrap();
+                undo_log.commit().unwrap();
+
+                store.set_flush_err(true);
+
+                undo_log.start().unwrap();
+                undo_log.write(20, "World".to_string()).unwrap();
+                undo_log.write(30, "Hello".to_string()).unwrap();
+                assert!(undo_log.commit().is_err());
+            }
+
+            // Create a new undo log which should automatically recover data.
+            let undo_log = UndoLog::new(path, store.clone()).unwrap();
+            assert_eq!(*undo_log.tid.read().unwrap(), 2);
+
+            let mut expected_entries = vec![UndoLogEntry::Transaction(Transaction::Start(1)),
+                                            UndoLogEntry::InsertEntry(InsertEntry {
+                                                tid: 1,
+                                                key: 20,
+                                                value: "Hello".to_string(),
+                                            }),
+                                            UndoLogEntry::Transaction(Transaction::Commit(1)),
+                                            UndoLogEntry::Transaction(Transaction::Start(2)),
+                                            UndoLogEntry::ChangeEntry(ChangeEntry {
+                                                tid: 2,
+                                                key: 20,
+                                                old: "Hello".to_string(),
+                                            }),
+                                            UndoLogEntry::InsertEntry(InsertEntry {
+                                                tid: 2,
+                                                key: 30,
+                                                value: "Hello".to_string(),
+                                            }),
+                                            UndoLogEntry::Transaction(Transaction::Abort(2))]
+                .into_iter();
+            let mut file = OpenOptions::new()
+                .read(true)
+                .append(true)
+                .create(true)
+                .open(path)
+                .unwrap();
+            let mut iter = WalIterator::new(&mut file).unwrap();
+            while let Ok(data) = read_serializable::<UndoLogEntry<MyLogData>>(&mut iter) {
+                assert_eq!(data, expected_entries.next().unwrap());
+            }
+
+            assert_eq!(store.get(&20), Some("Hello".to_string()));
+            assert_eq!(store.get(&30), None);
+        });
+        fs::remove_file(path).unwrap();
+        if let Err(e) = result {
+            panic!(e);
+        }
     }
 }

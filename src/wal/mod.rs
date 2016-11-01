@@ -118,7 +118,7 @@ pub fn read_serializable_backwards<S: Serializable>(iter: &mut WalIterator) -> i
     while let Some(mut record) = iter.next_back() {
         match record.record_type {
             RecordType::Zero | RecordType::Full => {
-                return S::deserialize(&mut &buf[..]);
+                return S::deserialize(&mut &record.payload[..]);
             }
             RecordType::First => {
                 if state != SerializableState::Middle {
