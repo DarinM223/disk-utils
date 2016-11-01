@@ -1,16 +1,13 @@
 extern crate disk_utils;
 
-use std::fs;
-use std::fs::OpenOptions;
 use std::io::{Seek, SeekFrom};
-use std::panic;
 
+use disk_utils::testing::create_test_file;
 use disk_utils::wal::record::{Record, RecordType};
 
 #[test]
 fn test_file_read_write() {
-    let path: &'static str = "./files/record_test";
-    let result = panic::catch_unwind(move || {
+    create_test_file("./files/record_test", |_, mut file| {
         let record = Record {
             crc: 123456789,
             size: 12345,
@@ -18,24 +15,12 @@ fn test_file_read_write() {
             payload: vec![123; 12345],
         };
 
-        let mut file = OpenOptions::new()
-            .read(true)
-            .append(true)
-            .create(true)
-            .open(path)
-            .unwrap();
-
         record.write(&mut file).unwrap();
         file.seek(SeekFrom::Start(0)).unwrap();
 
         let test_record = Record::read(&mut file).unwrap();
         assert_eq!(record, test_record);
-    });
-
-    fs::remove_file(path).unwrap();
-    if let Err(e) = result {
-        panic!(e);
-    }
+    }).unwrap();
 }
 
 #[test]

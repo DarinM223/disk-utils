@@ -1,10 +1,9 @@
 extern crate disk_utils;
 
-use std::fs;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{Seek, SeekFrom};
-use std::panic;
 
+use disk_utils::testing::create_test_file;
 use disk_utils::wal::iterator::WalIterator;
 use disk_utils::wal::record::{BLOCK_SIZE, HEADER_SIZE, Record, RecordType};
 
@@ -38,31 +37,18 @@ fn test_file(file: &mut File, records: Vec<Record>) {
 
 #[test]
 fn test_small_file() {
-    let record = Record {
-        crc: 123456789,
-        size: 1,
-        record_type: RecordType::Full,
-        payload: vec![0],
-    };
-
-    let path: &'static str = "./files/small_file";
-    let mut file = OpenOptions::new()
-        .read(true)
-        .append(true)
-        .create(true)
-        .open(path)
-        .unwrap();
-    let result = panic::catch_unwind(move || {
+    create_test_file("./files/small_file", |_, mut file| {
+        let record = Record {
+            crc: 123456789,
+            size: 1,
+            record_type: RecordType::Full,
+            payload: vec![0],
+        };
         record.write(&mut file).unwrap();
         file.seek(SeekFrom::Start(0)).unwrap();
 
         test_file(&mut file, vec![record]);
-    });
-
-    fs::remove_file(path).unwrap();
-    if let Err(e) = result {
-        panic!(e);
-    }
+    }).unwrap();
 }
 
 #[test]
@@ -85,26 +71,14 @@ fn test_perfect_file() {
         });
     }
 
-    let path: &'static str = "./files/perfect_file";
-    let mut file = OpenOptions::new()
-        .read(true)
-        .append(true)
-        .create(true)
-        .open(path)
-        .unwrap();
-    let result = panic::catch_unwind(move || {
+    create_test_file("./files/perfect_file", move |_, mut file| {
         for record in records.iter() {
             record.write(&mut file).unwrap();
         }
         file.seek(SeekFrom::Start(0)).unwrap();
 
         test_file(&mut file, records);
-    });
-
-    fs::remove_file(path).unwrap();
-    if let Err(e) = result {
-        panic!(e);
-    }
+    }).unwrap();
 }
 
 #[test]

@@ -1,10 +1,8 @@
 extern crate disk_utils;
 
-use std::fs;
-use std::fs::OpenOptions;
 use std::io::{Read, Seek, SeekFrom};
-use std::panic;
 
+use disk_utils::testing::{create_test_file, create_two_test_files};
 use disk_utils::wal::iterator::WalIterator;
 use disk_utils::wal::record::{BLOCK_SIZE, HEADER_SIZE, Record, RecordType};
 use disk_utils::wal::writer::Writer;
@@ -29,21 +27,9 @@ fn test_no_padding_on_same_block() {
         });
     }
 
-    let direct_write_path: &'static str = "./files/direct_write_file";
-    let writer_file_path: &'static str = "./files/writer_file_path";
-    let mut direct_write_file = OpenOptions::new()
-        .read(true)
-        .append(true)
-        .create(true)
-        .open(direct_write_path)
-        .unwrap();
-    let mut writer_file = OpenOptions::new()
-        .read(true)
-        .append(true)
-        .create(true)
-        .open(writer_file_path)
-        .unwrap();
-    let result = panic::catch_unwind(move || {
+    create_two_test_files("./files/direct_write_file",
+                          "./files/writer_file_path",
+                          move |_, _, mut direct_write_file, mut writer_file| {
         for record in records.iter() {
             record.write(&mut direct_write_file).unwrap();
         }
@@ -64,13 +50,7 @@ fn test_no_padding_on_same_block() {
             num_comparisons += 1;
         }
         assert_eq!(num_comparisons, file_len);
-    });
-
-    fs::remove_file(direct_write_path).unwrap();
-    fs::remove_file(writer_file_path).unwrap();
-    if let Err(e) = result {
-        panic!(e);
-    }
+    }).unwrap();
 }
 
 #[test]
@@ -92,25 +72,13 @@ fn test_padding_before_new_block() {
             payload: vec![123; payload_size as usize],
         });
     }
-    let direct_write_path: &'static str = "./files/direct_write_file2";
-    let writer_file_path: &'static str = "./files/writer_file_path2";
-    let mut direct_write_file = OpenOptions::new()
-        .read(true)
-        .append(true)
-        .create(true)
-        .open(direct_write_path)
-        .unwrap();
-    let mut writer_file = OpenOptions::new()
-        .read(true)
-        .append(true)
-        .create(true)
-        .open(writer_file_path)
-        .unwrap();
-    let result = panic::catch_unwind(move || {
+
+    create_two_test_files("./files/direct_write_file2",
+                          "./files/writer_file_path2",
+                          move |_, _, mut direct_write_file, mut writer_file| {
         for record in records.iter() {
             record.write(&mut direct_write_file).unwrap();
         }
-        direct_write_file.seek(SeekFrom::Start(0)).unwrap();
 
         {
             let mut writer = Writer::new(&mut writer_file);
@@ -118,7 +86,6 @@ fn test_padding_before_new_block() {
                 writer.append(record).unwrap();
             }
         }
-        writer_file.seek(SeekFrom::Start(0)).unwrap();
 
         let direct_write_file_len = direct_write_file.metadata().unwrap().len();
         let writer_file_len = writer_file.metadata().unwrap().len();
@@ -133,13 +100,7 @@ fn test_padding_before_new_block() {
             }
             assert_eq!(count, 8);
         }
-    });
-
-    fs::remove_file(direct_write_path).unwrap();
-    fs::remove_file(writer_file_path).unwrap();
-    if let Err(e) = result {
-        panic!(e);
-    }
+    }).unwrap();
 }
 
 #[test]
@@ -161,22 +122,13 @@ fn test_single_bytes() {
         });
     }
 
-    let path: &'static str = "./files/single_byte_test";
-    let mut file = OpenOptions::new()
-        .read(true)
-        .append(true)
-        .create(true)
-        .open(path)
-        .unwrap();
-    let result = panic::catch_unwind(move || {
+    create_test_file("./files/single_byte_test", move |_, mut file| {
         {
             let mut writer = Writer::new(&mut file);
             for record in records.iter() {
                 writer.append(record).unwrap();
             }
         }
-
-        file.seek(SeekFrom::Start(0)).unwrap();
 
         {
             let mut count = 0;
@@ -187,9 +139,5 @@ fn test_single_bytes() {
             }
             assert_eq!(count, num_records);
         }
-    });
-    fs::remove_file(path).unwrap();
-    if let Err(e) = result {
-        panic!(e);
-    }
+    }).unwrap();
 }

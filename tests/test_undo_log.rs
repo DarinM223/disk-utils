@@ -1,12 +1,10 @@
 extern crate disk_utils;
 
 use std::collections::HashMap;
-use std::fs;
-use std::fs::OpenOptions;
 use std::io;
-use std::panic;
 use std::sync::{Arc, RwLock};
 
+use disk_utils::testing::create_test_file;
 use disk_utils::wal::{LogData, read_serializable};
 use disk_utils::wal::entries::{ChangeEntry, InsertEntry, Transaction};
 use disk_utils::wal::iterator::WalIterator;
@@ -67,42 +65,31 @@ impl<Data> UndoLogStore<Data> for MyStore<Data>
 
 #[test]
 fn test_new_log_has_zero_tid() {
-    let path = "./files/new_undo_log";
-    let store: MyStore<MyLogData> = MyStore::new();
-    let undo_log = UndoLog::new(path, store).unwrap();
-    let result = panic::catch_unwind(move || {
+    create_test_file("./files/new_undo_log", |path, _| {
+        let store: MyStore<MyLogData> = MyStore::new();
+        let undo_log = UndoLog::new(path, store).unwrap();
         assert_eq!(*undo_log.tid.read().unwrap(), 0);
-    });
-    fs::remove_file(path).unwrap();
-    if let Err(e) = result {
-        panic!(e);
-    }
+    }).unwrap();
 }
 
 #[test]
 fn test_start() {
-    let path = "./files/start_undo_log";
-    let store: MyStore<MyLogData> = MyStore::new();
-    let mut undo_log = UndoLog::new(path, store).unwrap();
-    let result = panic::catch_unwind(move || {
+    create_test_file("./files/start_undo_log", |path, _| {
+        let store: MyStore<MyLogData> = MyStore::new();
+        let mut undo_log = UndoLog::new(path, store).unwrap();
         undo_log.start().unwrap();
 
         assert_eq!(undo_log.mem_log.lock().unwrap().len(), 1);
         assert_eq!(undo_log.mem_log.lock().unwrap()[0],
                    UndoLogEntry::Transaction(Transaction::Start(1)));
-    });
-    fs::remove_file(path).unwrap();
-    if let Err(e) = result {
-        panic!(e);
-    }
+    }).unwrap();
 }
 
 #[test]
 fn test_write() {
-    let path = "./files/write_undo_log";
-    let store: MyStore<MyLogData> = MyStore::new();
-    let mut undo_log = UndoLog::new(path, store).unwrap();
-    let result = panic::catch_unwind(move || {
+    create_test_file("./files/write_undo_log", |path, _| {
+        let store: MyStore<MyLogData> = MyStore::new();
+        let mut undo_log = UndoLog::new(path, store).unwrap();
         undo_log.start().unwrap();
         undo_log.write(20, "Hello".to_string()).unwrap();
 
@@ -119,19 +106,14 @@ fn test_write() {
                        key: 20,
                        old: "Hello".to_string(),
                    }));
-    });
-    fs::remove_file(path).unwrap();
-    if let Err(e) = result {
-        panic!(e);
-    }
+    }).unwrap();
 }
 
 #[test]
 fn test_commit() {
-    let path = "./files/commit_undo_log";
-    let store: MyStore<MyLogData> = MyStore::new();
-    let mut undo_log = UndoLog::new(path, store).unwrap();
-    let result = panic::catch_unwind(move || {
+    create_test_file("./files/commit_undo_log", |path, mut file| {
+        let store: MyStore<MyLogData> = MyStore::new();
+        let mut undo_log = UndoLog::new(path, store).unwrap();
         undo_log.start().unwrap();
         undo_log.write(20, "Hello".to_string()).unwrap();
         undo_log.write(20, "World".to_string()).unwrap();
@@ -149,29 +131,17 @@ fn test_commit() {
                  }),
                  UndoLogEntry::Transaction(Transaction::Commit(1))]
                 .into_iter();
-
-        let mut file = OpenOptions::new()
-            .read(true)
-            .append(true)
-            .create(true)
-            .open(path)
-            .unwrap();
         let mut iter = WalIterator::new(&mut file).unwrap();
         while let Ok(data) = read_serializable::<UndoLogEntry<MyLogData>>(&mut iter) {
             assert_eq!(data, expected_entries.next().unwrap());
         }
-    });
-    fs::remove_file(path).unwrap();
-    if let Err(e) = result {
-        panic!(e);
-    }
+    }).unwrap();
 }
 
 #[test]
 fn test_recover() {
-    let path = "./files/recover_undo_log";
-    let mut store: MyStore<MyLogData> = MyStore::new();
-    let result = panic::catch_unwind(move || {
+    create_test_file("./files/recover_undo_log", |path, mut file| {
+        let mut store: MyStore<MyLogData> = MyStore::new();
         {
             let mut undo_log = UndoLog::new(path, store.clone()).unwrap();
             undo_log.start().unwrap();
@@ -203,12 +173,6 @@ fn test_recover() {
                  UndoLogEntry::InsertEntry(InsertEntry { tid: 2, key: 30 }),
                  UndoLogEntry::Transaction(Transaction::Abort(2))]
                 .into_iter();
-        let mut file = OpenOptions::new()
-            .read(true)
-            .append(true)
-            .create(true)
-            .open(path)
-            .unwrap();
         let mut iter = WalIterator::new(&mut file).unwrap();
         while let Ok(data) = read_serializable::<UndoLogEntry<MyLogData>>(&mut iter) {
             assert_eq!(data, expected_entries.next().unwrap());
@@ -216,9 +180,5 @@ fn test_recover() {
 
         assert_eq!(store.get(&20), Some("Hello".to_string()));
         assert_eq!(store.get(&30), None);
-    });
-    fs::remove_file(path).unwrap();
-    if let Err(e) = result {
-        panic!(e);
-    }
+    }).unwrap();
 }
