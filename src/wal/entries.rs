@@ -1,7 +1,5 @@
-use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
-
 use std::io;
-use std::io::{Cursor, Read, Write};
+use std::io::{Read, Write};
 
 use wal::{LogData, Serializable};
 
@@ -26,9 +24,7 @@ impl Serializable for Transaction {
             Transaction::Abort(tid) => tid,
         };
 
-        let mut tid_bytes = Vec::new();
-        tid_bytes.write_u64::<BigEndian>(tid)?;
-        bytes.write(&tid_bytes)?;
+        tid.serialize(bytes)?;
         Ok(())
     }
 
@@ -36,17 +32,56 @@ impl Serializable for Transaction {
         let mut transaction_type = [0; 1];
         bytes.read(&mut transaction_type)?;
 
-        let mut buf = [0; 8];
-        bytes.read(&mut buf)?;
-
-        let mut rdr = Cursor::new(buf[..].to_vec());
-        let tid = rdr.read_u64::<BigEndian>()?;
-
+        let tid = u64::deserialize(bytes)?;
         match transaction_type[0] {
             0 => Ok(Transaction::Start(tid)),
             1 => Ok(Transaction::Commit(tid)),
             2 => Ok(Transaction::Abort(tid)),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid transaction type")),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Checkpoint {
+    Begin(Vec<Transaction>),
+    End,
+}
+
+impl Serializable for Checkpoint {
+    fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()> {
+        match *self {
+            Checkpoint::Begin(ref transactions) => {
+                bytes.write(&[0])?;
+                (transactions.len() as i32).serialize(bytes)?;
+                for transaction in transactions.iter() {
+                    transaction.serialize(bytes)?;
+                }
+            }
+            Checkpoint::End => {
+                bytes.write(&[1])?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn deserialize<R: Read>(bytes: &mut R) -> io::Result<Checkpoint> {
+        let mut checkpoint_type = [0; 1];
+        bytes.read(&mut checkpoint_type)?;
+
+        match checkpoint_type[0] {
+            0 => {
+                let len = i32::deserialize(bytes)?;
+                let mut transactions = Vec::with_capacity(len as usize);
+                for _ in 0..len {
+                    transactions.push(Transaction::deserialize(bytes)?);
+                }
+
+                Ok(Checkpoint::Begin(transactions))
+            }
+            1 => Ok(Checkpoint::End),
+            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid checkpoint type")),
         }
     }
 }
@@ -61,19 +96,14 @@ impl<Data> Serializable for InsertEntry<Data>
     where Data: LogData
 {
     fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()> {
-        let mut wtr = Vec::new();
-        wtr.write_u64::<BigEndian>(self.tid)?;
-        bytes.write(&wtr)?;
+        self.tid.serialize(bytes)?;
         self.key.serialize(bytes)?;
 
         Ok(())
     }
 
     fn deserialize<R: Read>(bytes: &mut R) -> io::Result<InsertEntry<Data>> {
-        let mut buf = [0; 8];
-        bytes.read(&mut buf)?;
-        let mut rdr = Cursor::new(buf[..].to_vec());
-        let tid = rdr.read_u64::<BigEndian>()?;
+        let tid = u64::deserialize(bytes)?;
         let key = Data::Key::deserialize(bytes)?;
 
         Ok(InsertEntry {
@@ -94,9 +124,7 @@ impl<Data> Serializable for ChangeEntry<Data>
     where Data: LogData
 {
     fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()> {
-        let mut wtr = Vec::new();
-        wtr.write_u64::<BigEndian>(self.tid)?;
-        bytes.write(&wtr)?;
+        self.tid.serialize(bytes)?;
         self.key.serialize(bytes)?;
         self.old.serialize(bytes)?;
 
@@ -104,10 +132,7 @@ impl<Data> Serializable for ChangeEntry<Data>
     }
 
     fn deserialize<R: Read>(bytes: &mut R) -> io::Result<ChangeEntry<Data>> {
-        let mut buf = [0; 8];
-        bytes.read(&mut buf)?;
-        let mut rdr = Cursor::new(buf[..].to_vec());
-        let tid = rdr.read_u64::<BigEndian>()?;
+        let tid = u64::deserialize(bytes)?;
         let (key, old) = (Data::Key::deserialize(bytes)?, Data::Value::deserialize(bytes)?);
 
         Ok(ChangeEntry {

@@ -5,10 +5,10 @@ use std::io;
 use std::sync::{Arc, RwLock};
 
 use disk_utils::testing::create_test_file;
-use disk_utils::wal::{LogData, read_serializable};
+use disk_utils::wal::{LogData, LogStore, read_serializable};
 use disk_utils::wal::entries::{ChangeEntry, InsertEntry, Transaction};
 use disk_utils::wal::iterator::WalIterator;
-use disk_utils::wal::undo_log::{UndoLog, UndoLogEntry, UndoLogStore};
+use disk_utils::wal::undo_log::{UndoLog, UndoLogEntry};
 
 #[derive(Clone, PartialEq, Debug)]
 struct MyLogData;
@@ -39,7 +39,7 @@ impl<Data> MyStore<Data>
     }
 }
 
-impl<Data> UndoLogStore<Data> for MyStore<Data>
+impl<Data> LogStore<Data> for MyStore<Data>
     where Data: LogData
 {
     fn get(&self, key: &Data::Key) -> Option<Data::Value> {

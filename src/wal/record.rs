@@ -36,7 +36,6 @@ pub const HEADER_SIZE: usize = 7;
 /// ```
 /// extern crate disk_utils;
 /// use disk_utils::wal::record::{Record, RecordType};
-/// use std::io::{Read, Write};
 ///
 /// fn main() {
 ///     let record = Record {

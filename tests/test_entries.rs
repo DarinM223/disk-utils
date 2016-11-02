@@ -1,7 +1,7 @@
 extern crate disk_utils;
 
 use disk_utils::wal::{LogData, Serializable};
-use disk_utils::wal::entries::{ChangeEntry, InsertEntry};
+use disk_utils::wal::entries::{ChangeEntry, Checkpoint, InsertEntry, Transaction};
 
 #[derive(Clone, PartialEq, Debug)]
 struct MyLogData;
@@ -38,4 +38,22 @@ fn test_change_entry() {
 
     let test_entry = ChangeEntry::deserialize(&mut &bytes[..]).unwrap();
     assert_eq!(entry, test_entry);
+}
+
+#[test]
+fn test_checkpoint() {
+    let transactions = vec![
+        Transaction::Start(20),
+        Transaction::Commit(20),
+        Transaction::Abort(20),
+    ];
+    let checkpoints = vec![Checkpoint::Begin(transactions), Checkpoint::End];
+
+    for checkpoint in checkpoints {
+        let mut bytes = Vec::new();
+        checkpoint.serialize(&mut bytes).unwrap();
+
+        let test_checkpoint = Checkpoint::deserialize(&mut &bytes[..]).unwrap();
+        assert_eq!(checkpoint, test_checkpoint);
+    }
 }

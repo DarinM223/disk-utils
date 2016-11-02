@@ -4,8 +4,8 @@ use std::io;
 use std::io::{Read, Write};
 use std::path::Path;
 
-use wal::{LogData, read_serializable_backwards, Serializable, split_bytes_into_records};
-use wal::entries::{ChangeEntry, InsertEntry, Transaction};
+use wal::{LogData, LogStore, read_serializable_backwards, Serializable, split_bytes_into_records};
+use wal::entries::{ChangeEntry, Checkpoint, InsertEntry, Transaction};
 use wal::iterator::WalIterator;
 use wal::writer::Writer;
 
@@ -14,6 +14,7 @@ pub enum UndoLogEntry<Data: LogData> {
     InsertEntry(InsertEntry<Data>),
     ChangeEntry(ChangeEntry<Data>),
     Transaction(Transaction),
+    Checkpoint(Checkpoint),
 }
 
 impl<Data> Serializable for UndoLogEntry<Data>
@@ -33,6 +34,10 @@ impl<Data> Serializable for UndoLogEntry<Data>
                 bytes.write(&[2])?;
                 entry.serialize(bytes)
             }
+            UndoLogEntry::Checkpoint(ref entry) => {
+                bytes.write(&[3])?;
+                entry.serialize(bytes)
+            }
         }
     }
 
@@ -44,6 +49,7 @@ impl<Data> Serializable for UndoLogEntry<Data>
             0 => Ok(UndoLogEntry::InsertEntry(InsertEntry::deserialize(bytes)?)),
             1 => Ok(UndoLogEntry::ChangeEntry(ChangeEntry::deserialize(bytes)?)),
             2 => Ok(UndoLogEntry::Transaction(Transaction::deserialize(bytes)?)),
+            3 => Ok(UndoLogEntry::Checkpoint(Checkpoint::deserialize(bytes)?)),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid entry type")),
         }
     }
@@ -51,14 +57,7 @@ impl<Data> Serializable for UndoLogEntry<Data>
 
 const MAX_RECORD_SIZE: usize = 1024;
 
-pub trait UndoLogStore<Data: LogData> {
-    fn get(&self, key: &Data::Key) -> Option<Data::Value>;
-    fn remove(&mut self, key: &Data::Key);
-    fn update(&mut self, key: Data::Key, val: Data::Value);
-    fn flush(&mut self) -> io::Result<()>;
-}
-
-pub struct UndoLog<Data: LogData, Store: UndoLogStore<Data>> {
+pub struct UndoLog<Data: LogData, Store: LogStore<Data>> {
     mem_log: VecDeque<UndoLogEntry<Data>>,
     last_tid: u64,
     active_tids: HashSet<u64>,
@@ -68,7 +67,7 @@ pub struct UndoLog<Data: LogData, Store: UndoLogStore<Data>> {
 
 impl<Data, Store> UndoLog<Data, Store>
     where Data: LogData,
-          Store: UndoLogStore<Data>
+          Store: LogStore<Data>
 {
     pub fn new<P: AsRef<Path> + ?Sized>(path: &P,
                                         store: Store)

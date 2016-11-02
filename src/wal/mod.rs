@@ -61,9 +61,33 @@ impl Serializable for i32 {
     }
 }
 
+impl Serializable for u64 {
+    fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()> {
+        let mut num_bytes = Vec::new();
+        num_bytes.write_u64::<BigEndian>(*self)?;
+        bytes.write(&num_bytes)?;
+        Ok(())
+    }
+
+    fn deserialize<R: Read>(bytes: &mut R) -> io::Result<u64> {
+        let mut buf = [0; 8];
+        bytes.read(&mut buf)?;
+
+        let mut num_reader = Cursor::new(buf[..].to_vec());
+        num_reader.read_u64::<BigEndian>()
+    }
+}
+
 pub trait LogData: Clone + PartialEq + Debug {
     type Key: Clone + PartialEq + Eq + Debug + Hash + Serializable;
     type Value: Clone + PartialEq + Debug + Serializable;
+}
+
+pub trait LogStore<Data: LogData> {
+    fn get(&self, key: &Data::Key) -> Option<Data::Value>;
+    fn remove(&mut self, key: &Data::Key);
+    fn update(&mut self, key: Data::Key, val: Data::Value);
+    fn flush(&mut self) -> io::Result<()>;
 }
 
 #[derive(PartialEq)]
