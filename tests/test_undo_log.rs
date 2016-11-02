@@ -64,24 +64,15 @@ impl<Data> UndoLogStore<Data> for MyStore<Data>
 }
 
 #[test]
-fn test_new_log_has_zero_tid() {
-    create_test_file("./files/new_undo_log", |path, _| {
-        let store: MyStore<MyLogData> = MyStore::new();
-        let undo_log = UndoLog::new(path, store).unwrap();
-        assert_eq!(*undo_log.tid.read().unwrap(), 0);
-    }).unwrap();
-}
-
-#[test]
 fn test_start() {
     create_test_file("./files/start_undo_log", |path, _| {
         let store: MyStore<MyLogData> = MyStore::new();
         let mut undo_log = UndoLog::new(path, store).unwrap();
-        undo_log.start().unwrap();
+        let tid = undo_log.start();
 
-        assert_eq!(undo_log.mem_log.lock().unwrap().len(), 1);
-        assert_eq!(undo_log.mem_log.lock().unwrap()[0],
-                   UndoLogEntry::Transaction(Transaction::Start(1)));
+        assert_eq!(tid, 1);
+        assert_eq!(undo_log.entries().len(), 1);
+        assert_eq!(undo_log.entries()[0], UndoLogEntry::Transaction(Transaction::Start(1)));
     }).unwrap();
 }
 
@@ -90,17 +81,19 @@ fn test_write() {
     create_test_file("./files/write_undo_log", |path, _| {
         let store: MyStore<MyLogData> = MyStore::new();
         let mut undo_log = UndoLog::new(path, store).unwrap();
-        undo_log.start().unwrap();
-        undo_log.write(20, "Hello".to_string()).unwrap();
 
-        assert_eq!(undo_log.mem_log.lock().unwrap().len(), 2);
-        assert_eq!(undo_log.mem_log.lock().unwrap()[1],
-                   UndoLogEntry::InsertEntry(InsertEntry { tid: 1, key: 20 }));
+        let tid = undo_log.start();
+        assert_eq!(tid, 1);
 
-        undo_log.write(20, "World".to_string()).unwrap();
+        undo_log.write(tid, 20, "Hello".to_string());
 
-        assert_eq!(undo_log.mem_log.lock().unwrap().len(), 3);
-        assert_eq!(undo_log.mem_log.lock().unwrap()[2],
+        assert_eq!(undo_log.entries().len(), 2);
+        assert_eq!(undo_log.entries()[1], UndoLogEntry::InsertEntry(InsertEntry { tid: 1, key: 20 }));
+
+        undo_log.write(tid, 20, "World".to_string());
+
+        assert_eq!(undo_log.entries().len(), 3);
+        assert_eq!(undo_log.entries()[2],
                    UndoLogEntry::ChangeEntry(ChangeEntry {
                        tid: 1,
                        key: 20,
@@ -114,12 +107,11 @@ fn test_commit() {
     create_test_file("./files/commit_undo_log", |path, mut file| {
         let store: MyStore<MyLogData> = MyStore::new();
         let mut undo_log = UndoLog::new(path, store).unwrap();
-        undo_log.start().unwrap();
-        undo_log.write(20, "Hello".to_string()).unwrap();
-        undo_log.write(20, "World".to_string()).unwrap();
-        undo_log.commit().unwrap();
-
-        assert_eq!(*undo_log.tid.read().unwrap(), 1);
+        let tid = undo_log.start();
+        assert_eq!(tid, 1);
+        undo_log.write(tid, 20, "Hello".to_string());
+        undo_log.write(tid, 20, "World".to_string());
+        undo_log.commit(tid).unwrap();
 
         let mut expected_entries =
             vec![UndoLogEntry::Transaction(Transaction::Start(1)),
@@ -144,21 +136,23 @@ fn test_recover() {
         let mut store: MyStore<MyLogData> = MyStore::new();
         {
             let mut undo_log = UndoLog::new(path, store.clone()).unwrap();
-            undo_log.start().unwrap();
-            undo_log.write(20, "Hello".to_string()).unwrap();
-            undo_log.commit().unwrap();
+            let tid = undo_log.start();
+            undo_log.write(tid, 20, "Hello".to_string());
+            undo_log.commit(tid).unwrap();
 
             store.set_flush_err(true);
 
-            undo_log.start().unwrap();
-            undo_log.write(20, "World".to_string()).unwrap();
-            undo_log.write(30, "Hello".to_string()).unwrap();
-            assert!(undo_log.commit().is_err());
+            let tid = undo_log.start();
+            undo_log.write(tid, 20, "World".to_string());
+            undo_log.write(tid, 30, "Hello".to_string());
+            assert!(undo_log.commit(tid).is_err());
+
+            store.set_flush_err(false);
         }
 
         // Create a new undo log which should automatically recover data.
-        let undo_log = UndoLog::new(path, store.clone()).unwrap();
-        assert_eq!(*undo_log.tid.read().unwrap(), 2);
+        let mut undo_log = UndoLog::new(path, store.clone()).unwrap();
+        assert_eq!(undo_log.start(), 3);
 
         let mut expected_entries =
             vec![UndoLogEntry::Transaction(Transaction::Start(1)),

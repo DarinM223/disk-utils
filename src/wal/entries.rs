@@ -5,7 +5,7 @@ use std::io::{Cursor, Read, Write};
 
 use wal::{LogData, Serializable};
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Transaction {
     Start(u64),
     Commit(u64),
@@ -51,7 +51,7 @@ impl Serializable for Transaction {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct InsertEntry<Data: LogData> {
     pub tid: u64,
     pub key: Data::Key,
@@ -83,7 +83,7 @@ impl<Data> Serializable for InsertEntry<Data>
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ChangeEntry<Data: LogData> {
     pub tid: u64,
     pub key: Data::Key,

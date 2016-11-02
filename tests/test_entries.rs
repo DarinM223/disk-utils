@@ -3,7 +3,7 @@ extern crate disk_utils;
 use disk_utils::wal::{LogData, Serializable};
 use disk_utils::wal::entries::{ChangeEntry, InsertEntry};
 
-#[derive(PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 struct MyLogData;
 
 impl LogData for MyLogData {

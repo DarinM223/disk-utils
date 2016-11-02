@@ -7,7 +7,7 @@ use disk_utils::wal::iterator::WalIterator;
 use disk_utils::wal::record::RecordType;
 use disk_utils::wal::writer::Writer;
 
-#[derive(PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 struct MyLogData;
 
 impl LogData for MyLogData {
