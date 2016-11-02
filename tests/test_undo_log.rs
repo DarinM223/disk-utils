@@ -176,3 +176,81 @@ fn test_recover() {
         assert_eq!(store.get(&30), None);
     }).unwrap();
 }
+
+#[test]
+fn test_multiple_recover() {
+    create_test_file("./files/multiple_recover_undo_log", |path, mut file| {
+        let mut store: MyStore<MyLogData> = MyStore::new();
+        {
+            let mut undo_log = UndoLog::new(path, store.clone()).unwrap();
+            let tid1 = undo_log.start();
+            let tid2 = undo_log.start();
+            undo_log.write(tid1, 20, "Hello".to_string());
+            undo_log.write(tid2, 30, "World".to_string());
+            undo_log.write(tid1, 30, "Blah".to_string());
+            undo_log.commit(tid1).unwrap();
+            undo_log.write(tid2, 20, "World".to_string());
+            undo_log.commit(tid2).unwrap();
+
+            let tid3 = undo_log.start();
+            let tid4 = undo_log.start();
+
+            undo_log.write(tid3, 40, "Foo".to_string());
+            undo_log.write(tid4, 30, "Bar".to_string());
+            undo_log.commit(tid3).unwrap();
+
+            undo_log.write(tid4, 50, "Hello".to_string());
+            store.set_flush_err(true);
+            assert!(undo_log.commit(tid4).is_err());
+            store.set_flush_err(false);
+        }
+
+        // Create a new undo log which should automatically recover data.
+        let mut undo_log = UndoLog::new(path, store.clone()).unwrap();
+        assert_eq!(undo_log.start(), 5);
+
+        let mut expected_entries =
+            vec![UndoLogEntry::Transaction(Transaction::Start(1)),
+                 UndoLogEntry::Transaction(Transaction::Start(2)),
+                 UndoLogEntry::InsertEntry(InsertEntry { tid: 1, key: 20 }),
+                 UndoLogEntry::InsertEntry(InsertEntry { tid: 2, key: 30 }),
+                 UndoLogEntry::ChangeEntry(ChangeEntry {
+                     tid: 1,
+                     key: 30,
+                     old: "World".to_string(),
+                 }),
+                 UndoLogEntry::Transaction(Transaction::Commit(1)),
+                 UndoLogEntry::ChangeEntry(ChangeEntry {
+                     tid: 2,
+                     key: 20,
+                     old: "Hello".to_string(),
+                 }),
+                 UndoLogEntry::Transaction(Transaction::Commit(2)),
+                 UndoLogEntry::Transaction(Transaction::Start(3)),
+                 UndoLogEntry::Transaction(Transaction::Start(4)),
+                 UndoLogEntry::InsertEntry(InsertEntry { tid: 3, key: 40 }),
+                 UndoLogEntry::ChangeEntry(ChangeEntry {
+                     tid: 4,
+                     key: 30,
+                     old: "Blah".to_string(),
+                 }),
+                 UndoLogEntry::Transaction(Transaction::Commit(3)),
+                 UndoLogEntry::InsertEntry(InsertEntry { tid: 4, key: 50 }),
+                 UndoLogEntry::Transaction(Transaction::Abort(4))]
+                .into_iter();
+        let mut iter = WalIterator::new(&mut file).unwrap();
+        while let Ok(data) = read_serializable::<UndoLogEntry<MyLogData>>(&mut iter) {
+            assert_eq!(data, expected_entries.next().unwrap());
+        }
+
+        // Expected state after recovery:
+        // 20 -> "World"
+        // 30 -> "Blah"
+        // 40 -> "Foo"
+        // 50 -> None
+        assert_eq!(store.get(&20), Some("World".to_string()));
+        assert_eq!(store.get(&30), Some("Blah".to_string()));
+        assert_eq!(store.get(&40), Some("Foo".to_string()));
+        assert_eq!(store.get(&50), None);
+    }).unwrap();
+}
