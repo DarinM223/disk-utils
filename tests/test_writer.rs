@@ -19,12 +19,7 @@ fn test_no_padding_on_same_block() {
             _ => RecordType::Middle,
         };
 
-        records.push(Record {
-            crc: 123456789,
-            size: payload_size,
-            record_type: record_type,
-            payload: vec![123; payload_size as usize],
-        });
+        records.push(Record::new(record_type, vec![123; payload_size as usize]));
     }
 
     create_two_test_files("./files/direct_write_file",
@@ -65,12 +60,7 @@ fn test_padding_before_new_block() {
             _ => RecordType::Middle,
         };
 
-        records.push(Record {
-            crc: 123456789,
-            size: payload_size,
-            record_type: record_type,
-            payload: vec![123; payload_size as usize],
-        });
+        records.push(Record::new(record_type, vec![123; payload_size as usize]));
     }
 
     create_two_test_files("./files/direct_write_file2",
@@ -114,12 +104,7 @@ fn test_single_bytes() {
             _ => RecordType::Middle,
         };
 
-        records.push(Record {
-            crc: 0,
-            size: 1,
-            record_type: record_type,
-            payload: vec![0],
-        });
+        records.push(Record::new(record_type, vec![0]));
     }
 
     create_test_file("./files/single_byte_test", move |_, mut file| {

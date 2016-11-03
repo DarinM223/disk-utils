@@ -1,4 +1,5 @@
 use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
+use crc::crc32;
 
 use std::io;
 use std::io::{Cursor, Read, Write};
@@ -38,12 +39,7 @@ pub const HEADER_SIZE: usize = 7;
 /// use disk_utils::wal::record::{Record, RecordType};
 ///
 /// fn main() {
-///     let record = Record {
-///         crc: 123456789,
-///         size: 12345,
-///         record_type: RecordType::Full,
-///         payload: vec![123; 12345],
-///     };
+///     let record = Record::new(RecordType::Full, vec![123; 12345]);
 ///
 ///     // Write record into a byte buffer.
 ///     let mut bytes = Vec::new();
@@ -63,6 +59,16 @@ pub struct Record {
 }
 
 impl Record {
+    pub fn new(record_type: RecordType, payload: Vec<u8>) -> Record {
+        let crc = crc32::checksum_ieee(&payload[..]);
+        Record {
+            crc: crc,
+            size: payload.len() as u16,
+            record_type: record_type,
+            payload: payload,
+        }
+    }
+
     pub fn read<R: Read>(reader: &mut R) -> io::Result<Record> {
         let mut buf = [0; HEADER_SIZE];
         reader.read_exact(&mut buf)?;
@@ -81,7 +87,11 @@ impl Record {
         let mut payload = vec![0; size as usize];
         reader.read_exact(&mut payload)?;
 
-        // TODO(DarinM223): check crc checksum for corruptions
+        let payload_crc = crc32::checksum_ieee(&payload[..]);
+        if payload_crc != crc {
+            return Err(io::Error::new(io::ErrorKind::InvalidData,
+                                      "CRC checksum failed, possibly corrupted record data"));
+        }
 
         Ok(Record {
             crc: crc,

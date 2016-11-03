@@ -1,4 +1,5 @@
 extern crate byteorder;
+extern crate crc;
 
 pub mod testing;
 pub mod wal;

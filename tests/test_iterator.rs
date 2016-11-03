@@ -38,12 +38,7 @@ fn test_file(file: &mut File, records: Vec<Record>) {
 #[test]
 fn test_small_file() {
     create_test_file("./files/small_file", |_, mut file| {
-        let record = Record {
-            crc: 123456789,
-            size: 1,
-            record_type: RecordType::Full,
-            payload: vec![0],
-        };
+        let record = Record::new(RecordType::Full, vec![0]);
         record.write(&mut file).unwrap();
         file.seek(SeekFrom::Start(0)).unwrap();
 
@@ -63,12 +58,7 @@ fn test_perfect_file() {
             _ => RecordType::Middle,
         };
 
-        records.push(Record {
-            crc: 123456789,
-            size: payload_size,
-            record_type: record_type,
-            payload: vec![123; payload_size as usize],
-        });
+        records.push(Record::new(record_type, vec![123; payload_size as usize]));
     }
 
     create_test_file("./files/perfect_file", move |_, mut file| {

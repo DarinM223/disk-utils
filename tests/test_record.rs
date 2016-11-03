@@ -8,13 +8,7 @@ use disk_utils::wal::record::{Record, RecordType};
 #[test]
 fn test_file_read_write() {
     create_test_file("./files/record_test", |_, mut file| {
-        let record = Record {
-            crc: 123456789,
-            size: 12345,
-            record_type: RecordType::Full,
-            payload: vec![123; 12345],
-        };
-
+        let record = Record::new(RecordType::Full, vec![123; 12345]);
         record.write(&mut file).unwrap();
         file.seek(SeekFrom::Start(0)).unwrap();
 
@@ -25,18 +19,25 @@ fn test_file_read_write() {
 
 #[test]
 fn test_single_byte_read_write() {
-    let record = Record {
-        crc: 123456789,
-        size: 1,
-        record_type: RecordType::Full,
-        payload: vec![0],
-    };
-
+    let record = Record::new(RecordType::Full, vec![0]);
     let mut bytes = Vec::new();
     record.write(&mut bytes).unwrap();
 
     let test_record = Record::read(&mut &bytes[..]).unwrap();
     assert_eq!(record, test_record);
+}
+
+#[test]
+fn test_corrupted_record() {
+    let record = Record::new(RecordType::Full, vec![123; 12345]);
+    let mut bytes = Vec::new();
+    record.write(&mut bytes).unwrap();
+
+    // Modify a byte in the buffer.
+    bytes[123] = 0;
+
+    // Check that the corruption is detected.
+    assert!(Record::read(&mut &bytes[..]).is_err());
 }
 
 #[test]

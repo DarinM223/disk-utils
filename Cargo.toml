@@ -5,3 +5,4 @@ authors = ["Darin Minamoto <darinm223@gmail.com>"]
 
 [dependencies]
 byteorder = "0.5"
+crc = "1.3.0"
