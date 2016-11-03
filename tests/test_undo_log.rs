@@ -6,7 +6,7 @@ use std::sync::{Arc, RwLock};
 
 use disk_utils::testing::create_test_file;
 use disk_utils::wal::{LogData, LogStore, read_serializable};
-use disk_utils::wal::entries::{ChangeEntry, InsertEntry, Transaction};
+use disk_utils::wal::entries::{ChangeEntry, Checkpoint, InsertEntry, Transaction};
 use disk_utils::wal::iterator::WalIterator;
 use disk_utils::wal::undo_log::{UndoLog, UndoLogEntry};
 
@@ -243,14 +243,155 @@ fn test_multiple_recover() {
             assert_eq!(data, expected_entries.next().unwrap());
         }
 
-        // Expected state after recovery:
-        // 20 -> "World"
-        // 30 -> "Blah"
-        // 40 -> "Foo"
-        // 50 -> None
+        // Test expected state after recovery:
         assert_eq!(store.get(&20), Some("World".to_string()));
         assert_eq!(store.get(&30), Some("Blah".to_string()));
         assert_eq!(store.get(&40), Some("Foo".to_string()));
         assert_eq!(store.get(&50), None);
+    }).unwrap();
+}
+
+#[test]
+fn test_add_end_checkpoint() {
+    create_test_file("./files/add_end_checkpoint", |path, mut file| {
+        let store: MyStore<MyLogData> = MyStore::new();
+        {
+            let mut undo_log = UndoLog::new(path, store.clone()).unwrap();
+            let tid1 = undo_log.start();
+            let tid2 = undo_log.start();
+            undo_log.commit(tid1).unwrap();
+            let tid3 = undo_log.start();
+            let tid4 = undo_log.start();
+            undo_log.checkpoint().unwrap();
+            undo_log.commit(tid3).unwrap();
+            undo_log.commit(tid4).unwrap();
+            undo_log.commit(tid2).unwrap();
+        }
+
+        let mut undo_log = UndoLog::new(path, store.clone()).unwrap();
+        assert_eq!(undo_log.start(), 5);
+
+        let mut expected_entries =
+            vec![UndoLogEntry::Transaction(Transaction::Start(1)),
+                 UndoLogEntry::Transaction(Transaction::Start(2)),
+                 UndoLogEntry::Transaction(Transaction::Commit(1)),
+                 UndoLogEntry::Transaction(Transaction::Start(3)),
+                 UndoLogEntry::Transaction(Transaction::Start(4)),
+                 UndoLogEntry::Checkpoint(Checkpoint::Begin(vec![2, 3, 4])),
+                 UndoLogEntry::Transaction(Transaction::Commit(3)),
+                 UndoLogEntry::Transaction(Transaction::Commit(4)),
+                 UndoLogEntry::Transaction(Transaction::Commit(2)),
+                 UndoLogEntry::Checkpoint(Checkpoint::End)]
+                .into_iter();
+        let mut iter = WalIterator::new(&mut file).unwrap();
+        while let Ok(data) = read_serializable::<UndoLogEntry<MyLogData>>(&mut iter) {
+            if let UndoLogEntry::Checkpoint(Checkpoint::Begin(mut data)) = data {
+                data.sort();
+                assert_eq!(UndoLogEntry::Checkpoint(Checkpoint::Begin(data)),
+                           expected_entries.next().unwrap());
+            } else {
+                assert_eq!(data, expected_entries.next().unwrap());
+            }
+        }
+    }).unwrap();
+}
+
+#[test]
+fn test_checkpoint_recover_before_end() {
+    create_test_file("./files/checkpoint_recover_before_end", |path, _| {
+        let mut store: MyStore<MyLogData> = MyStore::new();
+        {
+            let mut undo_log = UndoLog::new(path, store.clone()).unwrap();
+            let tid1 = undo_log.start();
+            let tid2 = undo_log.start();
+
+            undo_log.write(tid1, 20, "Hello".to_string());
+            undo_log.write(tid2, 20, "World".to_string());
+            undo_log.write(tid2, 30, "Blah".to_string());
+            undo_log.write(tid1, 30, "Foo".to_string());
+
+            undo_log.commit(tid1).unwrap();
+            undo_log.commit(tid2).unwrap();
+
+            let tid3 = undo_log.start();
+            let tid4 = undo_log.start();
+            let tid5 = undo_log.start();
+
+            undo_log.write(tid3, 20, "A".to_string());
+            undo_log.write(tid5, 30, "B".to_string());
+            undo_log.write(tid4, 30, "C".to_string());
+            undo_log.write(tid4, 50, "D".to_string());
+
+            undo_log.commit(tid4).unwrap();
+            undo_log.checkpoint().unwrap();
+
+            let tid6 = undo_log.start();
+            undo_log.write(tid6, 60, "E".to_string());
+            undo_log.commit(tid6).unwrap();
+
+            store.set_flush_err(true);
+            assert!(undo_log.commit(tid3).is_err());
+            store.set_flush_err(false);
+        }
+
+        // Create a new undo log which should automatically recover data.
+        let mut undo_log = UndoLog::new(path, store.clone()).unwrap();
+        assert_eq!(undo_log.start(), 7);
+
+        assert_eq!(store.get(&20), Some("World".to_string()));
+        assert_eq!(store.get(&30), Some("Foo".to_string()));
+        assert_eq!(store.get(&50), Some("D".to_string()));
+        assert_eq!(store.get(&60), Some("E".to_string()));
+    }).unwrap();
+}
+
+#[test]
+fn test_checkpoint_recover_after_end() {
+    create_test_file("./files/checkpoint_recover_after_end", |path, _| {
+        let mut store: MyStore<MyLogData> = MyStore::new();
+        {
+            let mut undo_log = UndoLog::new(path, store.clone()).unwrap();
+            let tid1 = undo_log.start();
+            let tid2 = undo_log.start();
+
+            undo_log.write(tid1, 20, "Hello".to_string());
+            undo_log.write(tid2, 20, "World".to_string());
+            undo_log.write(tid2, 30, "Blah".to_string());
+            undo_log.write(tid1, 30, "Foo".to_string());
+
+            undo_log.commit(tid1).unwrap();
+            undo_log.commit(tid2).unwrap();
+
+            let tid3 = undo_log.start();
+            let tid4 = undo_log.start();
+            let tid5 = undo_log.start();
+
+            undo_log.write(tid3, 20, "A".to_string());
+            undo_log.write(tid5, 30, "B".to_string());
+            undo_log.write(tid4, 30, "C".to_string());
+            undo_log.write(tid4, 50, "D".to_string());
+
+            undo_log.checkpoint().unwrap();
+            undo_log.commit(tid4).unwrap();
+            undo_log.commit(tid3).unwrap();
+            undo_log.commit(tid5).unwrap();
+
+            let tid6 = undo_log.start();
+            undo_log.write(tid6, 60, "E".to_string());
+            undo_log.write(tid6, 30, "F".to_string());
+
+            store.set_flush_err(true);
+            assert!(undo_log.commit(tid6).is_err());
+            store.set_flush_err(false);
+        }
+
+        // Create a new undo log which should automatically recover data.
+        let mut undo_log = UndoLog::new(path, store.clone()).unwrap();
+        assert_eq!(undo_log.start(), 7);
+
+        assert_eq!(store.get(&20), Some("A".to_string()));
+        assert_eq!(store.get(&30), Some("C".to_string()));
+        assert_eq!(store.get(&50), Some("D".to_string()));
+        assert_eq!(store.get(&60), None);
     }).unwrap();
 }

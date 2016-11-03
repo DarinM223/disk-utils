@@ -44,7 +44,7 @@ impl Serializable for Transaction {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Checkpoint {
-    Begin(Vec<Transaction>),
+    Begin(Vec<u64>),
     End,
 }
 
@@ -54,8 +54,8 @@ impl Serializable for Checkpoint {
             Checkpoint::Begin(ref transactions) => {
                 bytes.write(&[0])?;
                 (transactions.len() as i32).serialize(bytes)?;
-                for transaction in transactions.iter() {
-                    transaction.serialize(bytes)?;
+                for tid in transactions.iter() {
+                    tid.serialize(bytes)?;
                 }
             }
             Checkpoint::End => {
@@ -75,7 +75,7 @@ impl Serializable for Checkpoint {
                 let len = i32::deserialize(bytes)?;
                 let mut transactions = Vec::with_capacity(len as usize);
                 for _ in 0..len {
-                    transactions.push(Transaction::deserialize(bytes)?);
+                    transactions.push(u64::deserialize(bytes)?);
                 }
 
                 Ok(Checkpoint::Begin(transactions))

@@ -1,3 +1,4 @@
+use std::cmp;
 use std::collections::{VecDeque, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io;
@@ -57,9 +58,22 @@ impl<Data> Serializable for UndoLogEntry<Data>
 
 const MAX_RECORD_SIZE: usize = 1024;
 
+#[derive(PartialEq)]
+enum RecoverState {
+    /// No checkpoint entry found, read until end of log.
+    None,
+    /// Begin checkpoint entry found, read until the start entry
+    /// of every transaction in the checkpoint is read.
+    Begin(HashSet<u64>),
+    /// End checkpoint entry found, read until a begin
+    /// checkpoint entry is found.
+    End,
+}
+
 pub struct UndoLog<Data: LogData, Store: LogStore<Data>> {
     mem_log: VecDeque<UndoLogEntry<Data>>,
     last_tid: u64,
+    checkpoint_tids: Option<Vec<u64>>,
     active_tids: HashSet<u64>,
     file: File,
     store: Store,
@@ -72,38 +86,20 @@ impl<Data, Store> UndoLog<Data, Store>
     pub fn new<P: AsRef<Path> + ?Sized>(path: &P,
                                         store: Store)
                                         -> io::Result<UndoLog<Data, Store>> {
-        let mut file = OpenOptions::new()
+        let file = OpenOptions::new()
             .read(true)
             .append(true)
             .create(true)
             .open(path)?;
-        let mut tid = 0;
-        let mut recover = false;
-
-        // Do a backwards pass over the file.
-        // If last record is not a COMMIT or ABORT, then start recovery.
-        {
-            let mut iter = WalIterator::new(&mut file)?;
-            if let Ok(data) = read_serializable_backwards::<UndoLogEntry<Data>>(&mut iter) {
-                match data {
-                    UndoLogEntry::Transaction(Transaction::Commit(id)) => tid = id,
-                    UndoLogEntry::Transaction(Transaction::Abort(id)) => tid = id,
-                    _ => recover = true,
-                }
-            }
-        }
-
         let mut log = UndoLog {
             file: file,
             mem_log: VecDeque::new(),
-            last_tid: tid,
+            last_tid: 0,
+            checkpoint_tids: None,
             active_tids: HashSet::new(),
             store: store,
         };
-
-        if recover {
-            log.recover()?;
-        }
+        log.recover()?;
         Ok(log)
     }
 
@@ -111,9 +107,10 @@ impl<Data, Store> UndoLog<Data, Store>
         self.mem_log.clone().into_iter().collect()
     }
 
-    pub fn recover(&mut self) -> io::Result<()> {
+    fn recover(&mut self) -> io::Result<()> {
         let mut finished_transactions = HashSet::new();
         let mut unfinished_transactions = HashSet::new();
+        let mut state = RecoverState::None;
 
         {
             let mut iter = WalIterator::new(&mut self.file)?;
@@ -124,6 +121,14 @@ impl<Data, Store> UndoLog<Data, Store>
                     }
                     UndoLogEntry::Transaction(Transaction::Abort(id)) => {
                         finished_transactions.insert(id);
+                    }
+                    UndoLogEntry::Transaction(Transaction::Start(id)) => {
+                        if let RecoverState::Begin(ref mut transactions) = state {
+                            transactions.remove(&id);
+                            if transactions.is_empty() {
+                                break;
+                            }
+                        }
                     }
                     UndoLogEntry::InsertEntry(entry) => {
                         if !finished_transactions.contains(&entry.tid) {
@@ -137,30 +142,37 @@ impl<Data, Store> UndoLog<Data, Store>
                             unfinished_transactions.insert(entry.tid);
                         }
                     }
-                    _ => {}
+                    UndoLogEntry::Checkpoint(Checkpoint::Begin(transactions)) => {
+                        match state {
+                            RecoverState::None => {
+                                if transactions.is_empty() {
+                                    break;
+                                }
+                                state = RecoverState::Begin(transactions.into_iter().collect());
+                            }
+                            RecoverState::End => break,
+                            _ => {}
+                        }
+                    }
+                    UndoLogEntry::Checkpoint(Checkpoint::End) => {
+                        if state == RecoverState::None {
+                            state = RecoverState::End;
+                        }
+                    }
                 }
             }
         }
 
         // Flush undo store changes first before writing aborts to the log.
         self.store.flush()?;
-
-        let mut max_tid = None;
-        for unfinished_tid in unfinished_transactions {
-            self.mem_log.push_back(UndoLogEntry::Transaction(Transaction::Abort(unfinished_tid)));
-            self.active_tids.remove(&unfinished_tid);
-
-            match max_tid {
-                Some(tid) if unfinished_tid > tid => max_tid = Some(unfinished_tid),
-                None => max_tid = Some(unfinished_tid),
-                _ => {}
-            }
+        for unfinished_tid in unfinished_transactions.iter() {
+            self.mem_log.push_back(UndoLogEntry::Transaction(Transaction::Abort(*unfinished_tid)));
         }
 
-        // Set the last tid to the largest aborted tid.
-        if let Some(max_tid) = max_tid {
-            self.last_tid = max_tid;
-        }
+        // Set the last tid to the largest tid.
+        let max_unfinished = unfinished_transactions.into_iter().max().unwrap_or(0);
+        let max_finished = finished_transactions.into_iter().max().unwrap_or(0);
+        self.last_tid = cmp::max(max_unfinished, max_finished);
 
         self.flush()?;
         Ok(())
@@ -178,6 +190,18 @@ impl<Data, Store> UndoLog<Data, Store>
             }
         }
         self.mem_log.clear();
+        Ok(())
+    }
+
+    pub fn checkpoint(&mut self) -> io::Result<()> {
+        if self.checkpoint_tids.is_none() {
+            let transactions: Vec<_> = self.active_tids.clone().into_iter().collect();
+            let entry = UndoLogEntry::Checkpoint(Checkpoint::Begin(transactions.clone()));
+            self.mem_log.push_back(entry);
+            self.flush()?;
+            self.checkpoint_tids = Some(transactions);
+        }
+
         Ok(())
     }
 
@@ -217,6 +241,25 @@ impl<Data, Store> UndoLog<Data, Store>
             let entry = UndoLogEntry::Transaction(Transaction::Commit(tid));
             self.mem_log.push_back(entry);
             self.active_tids.remove(&tid);
+
+            // Add end checkpoint to log if all checkpoint transactions have finished.
+            if let Some(tids) = self.checkpoint_tids.take() {
+                let mut transactions_completed = true;
+                for tid in tids.iter() {
+                    if self.active_tids.contains(tid) {
+                        transactions_completed = false;
+                        break;
+                    }
+                }
+
+                if transactions_completed {
+                    let entry = UndoLogEntry::Checkpoint(Checkpoint::End);
+                    self.mem_log.push_back(entry);
+                    self.checkpoint_tids = None;
+                } else {
+                    self.checkpoint_tids = Some(tids);
+                }
+            }
             self.flush()?;
         }
 
