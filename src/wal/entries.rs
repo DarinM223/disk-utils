@@ -117,7 +117,7 @@ impl<Data> Serializable for InsertEntry<Data>
 pub struct ChangeEntry<Data: LogData> {
     pub tid: u64,
     pub key: Data::Key,
-    pub old: Data::Value,
+    pub value: Data::Value,
 }
 
 impl<Data> Serializable for ChangeEntry<Data>
@@ -126,19 +126,67 @@ impl<Data> Serializable for ChangeEntry<Data>
     fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()> {
         self.tid.serialize(bytes)?;
         self.key.serialize(bytes)?;
-        self.old.serialize(bytes)?;
+        self.value.serialize(bytes)?;
 
         Ok(())
     }
 
     fn deserialize<R: Read>(bytes: &mut R) -> io::Result<ChangeEntry<Data>> {
         let tid = u64::deserialize(bytes)?;
-        let (key, old) = (Data::Key::deserialize(bytes)?, Data::Value::deserialize(bytes)?);
+        let (key, value) = (Data::Key::deserialize(bytes)?, Data::Value::deserialize(bytes)?);
 
         Ok(ChangeEntry {
             tid: tid,
             key: key,
-            old: old,
+            value: value,
         })
+    }
+}
+
+/// Main log entry for undo logs and redo logs.
+/// This entry type is not used by undo/redo logs.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SingleLogEntry<Data: LogData> {
+    InsertEntry(InsertEntry<Data>),
+    ChangeEntry(ChangeEntry<Data>),
+    Transaction(Transaction),
+    Checkpoint(Checkpoint),
+}
+
+impl<Data> Serializable for SingleLogEntry<Data>
+    where Data: LogData
+{
+    fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()> {
+        match *self {
+            SingleLogEntry::InsertEntry(ref entry) => {
+                bytes.write(&[0])?;
+                entry.serialize(bytes)
+            }
+            SingleLogEntry::ChangeEntry(ref entry) => {
+                bytes.write(&[1])?;
+                entry.serialize(bytes)
+            }
+            SingleLogEntry::Transaction(ref entry) => {
+                bytes.write(&[2])?;
+                entry.serialize(bytes)
+            }
+            SingleLogEntry::Checkpoint(ref entry) => {
+                bytes.write(&[3])?;
+                entry.serialize(bytes)
+            }
+        }
+    }
+
+    fn deserialize<R: Read>(bytes: &mut R) -> io::Result<SingleLogEntry<Data>> {
+        let mut entry_type = [0; 1];
+        bytes.read(&mut entry_type)?;
+
+        match entry_type[0] {
+            0 => Ok(SingleLogEntry::InsertEntry(InsertEntry::deserialize(bytes)?)),
+            1 => Ok(SingleLogEntry::ChangeEntry(ChangeEntry::deserialize(bytes)?)),
+            2 => Ok(SingleLogEntry::Transaction(Transaction::deserialize(bytes)?)),
+            3 => Ok(SingleLogEntry::Checkpoint(Checkpoint::deserialize(bytes)?)),
+            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid entry type")),
+        }
     }
 }

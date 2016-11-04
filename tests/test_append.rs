@@ -3,9 +3,9 @@ extern crate disk_utils;
 use std::io::{Read, Seek, SeekFrom};
 
 use disk_utils::testing::{create_test_file, create_two_test_files};
+use disk_utils::wal::append_to_file;
 use disk_utils::wal::iterator::WalIterator;
 use disk_utils::wal::record::{BLOCK_SIZE, HEADER_SIZE, Record, RecordType};
-use disk_utils::wal::writer::Writer;
 
 #[test]
 fn test_no_padding_on_same_block() {
@@ -30,11 +30,8 @@ fn test_no_padding_on_same_block() {
         }
         direct_write_file.seek(SeekFrom::Start(0)).unwrap();
 
-        {
-            let mut writer = Writer::new(&mut writer_file);
-            for record in records.iter() {
-                writer.append(record).unwrap();
-            }
+        for record in records.iter() {
+            append_to_file(&mut writer_file, record).unwrap();
         }
         writer_file.seek(SeekFrom::Start(0)).unwrap();
 
@@ -70,11 +67,8 @@ fn test_padding_before_new_block() {
             record.write(&mut direct_write_file).unwrap();
         }
 
-        {
-            let mut writer = Writer::new(&mut writer_file);
-            for record in records.iter() {
-                writer.append(record).unwrap();
-            }
+        for record in records.iter() {
+            append_to_file(&mut writer_file, record).unwrap();
         }
 
         let direct_write_file_len = direct_write_file.metadata().unwrap().len();
@@ -108,11 +102,8 @@ fn test_single_bytes() {
     }
 
     create_test_file("./files/single_byte_test", move |_, mut file| {
-        {
-            let mut writer = Writer::new(&mut file);
-            for record in records.iter() {
-                writer.append(record).unwrap();
-            }
+        for record in records.iter() {
+            append_to_file(&mut file, record).unwrap();
         }
 
         {

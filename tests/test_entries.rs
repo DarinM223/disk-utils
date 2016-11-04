@@ -30,7 +30,7 @@ fn test_change_entry() {
     let entry: ChangeEntry<MyLogData> = ChangeEntry {
         tid: 123,
         key: 20,
-        old: "Hello world!".to_string(),
+        value: "Hello world!".to_string(),
     };
 
     let mut bytes = Vec::new();

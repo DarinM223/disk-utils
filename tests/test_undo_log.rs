@@ -6,9 +6,9 @@ use std::sync::{Arc, RwLock};
 
 use disk_utils::testing::create_test_file;
 use disk_utils::wal::{LogData, LogStore, read_serializable};
-use disk_utils::wal::entries::{ChangeEntry, Checkpoint, InsertEntry, Transaction};
+use disk_utils::wal::entries::{ChangeEntry, Checkpoint, InsertEntry, SingleLogEntry, Transaction};
 use disk_utils::wal::iterator::WalIterator;
-use disk_utils::wal::undo_log::{UndoLog, UndoLogEntry};
+use disk_utils::wal::undo_log::UndoLog;
 
 #[derive(Clone, PartialEq, Debug)]
 struct MyLogData;
@@ -72,7 +72,7 @@ fn test_start() {
 
         assert_eq!(tid, 1);
         assert_eq!(undo_log.entries().len(), 1);
-        assert_eq!(undo_log.entries()[0], UndoLogEntry::Transaction(Transaction::Start(1)));
+        assert_eq!(undo_log.entries()[0], SingleLogEntry::Transaction(Transaction::Start(1)));
     }).unwrap();
 }
 
@@ -88,16 +88,16 @@ fn test_write() {
         undo_log.write(tid, 20, "Hello".to_string());
 
         assert_eq!(undo_log.entries().len(), 2);
-        assert_eq!(undo_log.entries()[1], UndoLogEntry::InsertEntry(InsertEntry { tid: 1, key: 20 }));
+        assert_eq!(undo_log.entries()[1], SingleLogEntry::InsertEntry(InsertEntry { tid: 1, key: 20 }));
 
         undo_log.write(tid, 20, "World".to_string());
 
         assert_eq!(undo_log.entries().len(), 3);
         assert_eq!(undo_log.entries()[2],
-                   UndoLogEntry::ChangeEntry(ChangeEntry {
+                   SingleLogEntry::ChangeEntry(ChangeEntry {
                        tid: 1,
                        key: 20,
-                       old: "Hello".to_string(),
+                       value: "Hello".to_string(),
                    }));
     }).unwrap();
 }
@@ -114,17 +114,17 @@ fn test_commit() {
         undo_log.commit(tid).unwrap();
 
         let mut expected_entries =
-            vec![UndoLogEntry::Transaction(Transaction::Start(1)),
-                 UndoLogEntry::InsertEntry(InsertEntry { tid: 1, key: 20 }),
-                 UndoLogEntry::ChangeEntry(ChangeEntry {
+            vec![SingleLogEntry::Transaction(Transaction::Start(1)),
+                 SingleLogEntry::InsertEntry(InsertEntry { tid: 1, key: 20 }),
+                 SingleLogEntry::ChangeEntry(ChangeEntry {
                      tid: 1,
                      key: 20,
-                     old: "Hello".to_string(),
+                     value: "Hello".to_string(),
                  }),
-                 UndoLogEntry::Transaction(Transaction::Commit(1))]
+                 SingleLogEntry::Transaction(Transaction::Commit(1))]
                 .into_iter();
         let mut iter = WalIterator::new(&mut file).unwrap();
-        while let Ok(data) = read_serializable::<UndoLogEntry<MyLogData>>(&mut iter) {
+        while let Ok(data) = read_serializable::<SingleLogEntry<MyLogData>>(&mut iter) {
             assert_eq!(data, expected_entries.next().unwrap());
         }
     }).unwrap();
@@ -155,20 +155,20 @@ fn test_recover() {
         assert_eq!(undo_log.start(), 3);
 
         let mut expected_entries =
-            vec![UndoLogEntry::Transaction(Transaction::Start(1)),
-                 UndoLogEntry::InsertEntry(InsertEntry { tid: 1, key: 20 }),
-                 UndoLogEntry::Transaction(Transaction::Commit(1)),
-                 UndoLogEntry::Transaction(Transaction::Start(2)),
-                 UndoLogEntry::ChangeEntry(ChangeEntry {
+            vec![SingleLogEntry::Transaction(Transaction::Start(1)),
+                 SingleLogEntry::InsertEntry(InsertEntry { tid: 1, key: 20 }),
+                 SingleLogEntry::Transaction(Transaction::Commit(1)),
+                 SingleLogEntry::Transaction(Transaction::Start(2)),
+                 SingleLogEntry::ChangeEntry(ChangeEntry {
                      tid: 2,
                      key: 20,
-                     old: "Hello".to_string(),
+                     value: "Hello".to_string(),
                  }),
-                 UndoLogEntry::InsertEntry(InsertEntry { tid: 2, key: 30 }),
-                 UndoLogEntry::Transaction(Transaction::Abort(2))]
+                 SingleLogEntry::InsertEntry(InsertEntry { tid: 2, key: 30 }),
+                 SingleLogEntry::Transaction(Transaction::Abort(2))]
                 .into_iter();
         let mut iter = WalIterator::new(&mut file).unwrap();
-        while let Ok(data) = read_serializable::<UndoLogEntry<MyLogData>>(&mut iter) {
+        while let Ok(data) = read_serializable::<SingleLogEntry<MyLogData>>(&mut iter) {
             assert_eq!(data, expected_entries.next().unwrap());
         }
 
@@ -210,36 +210,36 @@ fn test_multiple_recover() {
         assert_eq!(undo_log.start(), 5);
 
         let mut expected_entries =
-            vec![UndoLogEntry::Transaction(Transaction::Start(1)),
-                 UndoLogEntry::Transaction(Transaction::Start(2)),
-                 UndoLogEntry::InsertEntry(InsertEntry { tid: 1, key: 20 }),
-                 UndoLogEntry::InsertEntry(InsertEntry { tid: 2, key: 30 }),
-                 UndoLogEntry::ChangeEntry(ChangeEntry {
+            vec![SingleLogEntry::Transaction(Transaction::Start(1)),
+                 SingleLogEntry::Transaction(Transaction::Start(2)),
+                 SingleLogEntry::InsertEntry(InsertEntry { tid: 1, key: 20 }),
+                 SingleLogEntry::InsertEntry(InsertEntry { tid: 2, key: 30 }),
+                 SingleLogEntry::ChangeEntry(ChangeEntry {
                      tid: 1,
                      key: 30,
-                     old: "World".to_string(),
+                     value: "World".to_string(),
                  }),
-                 UndoLogEntry::Transaction(Transaction::Commit(1)),
-                 UndoLogEntry::ChangeEntry(ChangeEntry {
+                 SingleLogEntry::Transaction(Transaction::Commit(1)),
+                 SingleLogEntry::ChangeEntry(ChangeEntry {
                      tid: 2,
                      key: 20,
-                     old: "Hello".to_string(),
+                     value: "Hello".to_string(),
                  }),
-                 UndoLogEntry::Transaction(Transaction::Commit(2)),
-                 UndoLogEntry::Transaction(Transaction::Start(3)),
-                 UndoLogEntry::Transaction(Transaction::Start(4)),
-                 UndoLogEntry::InsertEntry(InsertEntry { tid: 3, key: 40 }),
-                 UndoLogEntry::ChangeEntry(ChangeEntry {
+                 SingleLogEntry::Transaction(Transaction::Commit(2)),
+                 SingleLogEntry::Transaction(Transaction::Start(3)),
+                 SingleLogEntry::Transaction(Transaction::Start(4)),
+                 SingleLogEntry::InsertEntry(InsertEntry { tid: 3, key: 40 }),
+                 SingleLogEntry::ChangeEntry(ChangeEntry {
                      tid: 4,
                      key: 30,
-                     old: "Blah".to_string(),
+                     value: "Blah".to_string(),
                  }),
-                 UndoLogEntry::Transaction(Transaction::Commit(3)),
-                 UndoLogEntry::InsertEntry(InsertEntry { tid: 4, key: 50 }),
-                 UndoLogEntry::Transaction(Transaction::Abort(4))]
+                 SingleLogEntry::Transaction(Transaction::Commit(3)),
+                 SingleLogEntry::InsertEntry(InsertEntry { tid: 4, key: 50 }),
+                 SingleLogEntry::Transaction(Transaction::Abort(4))]
                 .into_iter();
         let mut iter = WalIterator::new(&mut file).unwrap();
-        while let Ok(data) = read_serializable::<UndoLogEntry<MyLogData>>(&mut iter) {
+        while let Ok(data) = read_serializable::<SingleLogEntry<MyLogData>>(&mut iter) {
             assert_eq!(data, expected_entries.next().unwrap());
         }
 
@@ -272,22 +272,22 @@ fn test_add_end_checkpoint() {
         assert_eq!(undo_log.start(), 5);
 
         let mut expected_entries =
-            vec![UndoLogEntry::Transaction(Transaction::Start(1)),
-                 UndoLogEntry::Transaction(Transaction::Start(2)),
-                 UndoLogEntry::Transaction(Transaction::Commit(1)),
-                 UndoLogEntry::Transaction(Transaction::Start(3)),
-                 UndoLogEntry::Transaction(Transaction::Start(4)),
-                 UndoLogEntry::Checkpoint(Checkpoint::Begin(vec![2, 3, 4])),
-                 UndoLogEntry::Transaction(Transaction::Commit(3)),
-                 UndoLogEntry::Transaction(Transaction::Commit(4)),
-                 UndoLogEntry::Transaction(Transaction::Commit(2)),
-                 UndoLogEntry::Checkpoint(Checkpoint::End)]
+            vec![SingleLogEntry::Transaction(Transaction::Start(1)),
+                 SingleLogEntry::Transaction(Transaction::Start(2)),
+                 SingleLogEntry::Transaction(Transaction::Commit(1)),
+                 SingleLogEntry::Transaction(Transaction::Start(3)),
+                 SingleLogEntry::Transaction(Transaction::Start(4)),
+                 SingleLogEntry::Checkpoint(Checkpoint::Begin(vec![2, 3, 4])),
+                 SingleLogEntry::Transaction(Transaction::Commit(3)),
+                 SingleLogEntry::Transaction(Transaction::Commit(4)),
+                 SingleLogEntry::Transaction(Transaction::Commit(2)),
+                 SingleLogEntry::Checkpoint(Checkpoint::End)]
                 .into_iter();
         let mut iter = WalIterator::new(&mut file).unwrap();
-        while let Ok(data) = read_serializable::<UndoLogEntry<MyLogData>>(&mut iter) {
-            if let UndoLogEntry::Checkpoint(Checkpoint::Begin(mut data)) = data {
+        while let Ok(data) = read_serializable::<SingleLogEntry<MyLogData>>(&mut iter) {
+            if let SingleLogEntry::Checkpoint(Checkpoint::Begin(mut data)) = data {
                 data.sort();
-                assert_eq!(UndoLogEntry::Checkpoint(Checkpoint::Begin(data)),
+                assert_eq!(SingleLogEntry::Checkpoint(Checkpoint::Begin(data)),
                            expected_entries.next().unwrap());
             } else {
                 assert_eq!(data, expected_entries.next().unwrap());

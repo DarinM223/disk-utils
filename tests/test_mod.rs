@@ -1,11 +1,11 @@
 extern crate disk_utils;
 
 use disk_utils::testing::create_test_file;
-use disk_utils::wal::{LogData, read_serializable, read_serializable_backwards, Serializable, split_bytes_into_records};
+use disk_utils::wal::{append_to_file, LogData, read_serializable, read_serializable_backwards,
+                      Serializable, split_bytes_into_records};
 use disk_utils::wal::entries::ChangeEntry;
 use disk_utils::wal::iterator::WalIterator;
 use disk_utils::wal::record::RecordType;
-use disk_utils::wal::writer::Writer;
 
 #[derive(Clone, PartialEq, Debug)]
 struct MyLogData;
@@ -20,7 +20,7 @@ fn test_split_bytes() {
     let entry: ChangeEntry<MyLogData> = ChangeEntry {
         tid: 123,
         key: 20,
-        old: "Hello world".to_string(),
+        value: "Hello world".to_string(),
     };
 
     let mut bytes = Vec::new();
@@ -49,17 +49,14 @@ fn test_read_serializable() {
         let entry = ChangeEntry {
             tid: 123,
             key: 20,
-            old: "Hello world".to_string(),
+            value: "Hello world".to_string(),
         };
 
         let mut bytes = Vec::new();
         entry.serialize(&mut bytes).unwrap();
         let records = split_bytes_into_records(bytes, 1).unwrap();
-        {
-            let mut writer = Writer::new(&mut file);
-            for record in records.iter() {
-                writer.append(record).unwrap();
-            }
+        for record in records.iter() {
+            append_to_file(&mut file, record).unwrap();
         }
 
         {
