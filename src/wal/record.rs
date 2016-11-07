@@ -26,7 +26,7 @@ impl RecordType {
 }
 
 /// 32KB Block size.
-pub const BLOCK_SIZE: i64 = 32000;
+pub const BLOCK_SIZE: i64 = 32768;
 /// 7B Header size for record.
 pub const HEADER_SIZE: usize = 7;
 

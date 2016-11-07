@@ -1,6 +1,7 @@
 pub mod entries;
 pub mod iterator;
 pub mod record;
+pub mod redo_log;
 pub mod serializable;
 pub mod undo_log;
 
