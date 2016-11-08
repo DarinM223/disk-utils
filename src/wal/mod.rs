@@ -29,6 +29,7 @@ pub trait LogStore<Data: LogData> {
     fn remove(&mut self, key: &Data::Key);
     fn update(&mut self, key: Data::Key, val: Data::Value);
     fn flush(&mut self) -> io::Result<()>;
+    fn flush_change(&mut self, key: Data::Key, val: Data::Value) -> io::Result<()>;
 }
 
 #[derive(PartialEq)]

@@ -61,6 +61,14 @@ impl<Data> LogStore<Data> for MyStore<Data>
             Ok(())
         }
     }
+
+    fn flush_change(&mut self, key: Data::Key, val: Data::Value) -> io::Result<()> {
+        if *self.flush_err.read().unwrap() {
+            Err(io::Error::new(io::ErrorKind::Interrupted, "Flush error occurred"))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 #[test]
