@@ -8,6 +8,7 @@ pub mod undo_log;
 use self::iterator::WalIterator;
 use self::record::{BLOCK_SIZE, Record, RecordType};
 
+use std::collections::HashSet;
 use std::fmt::Debug;
 use std::fs::File;
 use std::hash::Hash;
@@ -30,6 +31,18 @@ pub trait LogStore<Data: LogData> {
     fn update(&mut self, key: Data::Key, val: Data::Value);
     fn flush(&mut self) -> io::Result<()>;
     fn flush_change(&mut self, key: Data::Key, val: Data::Value) -> io::Result<()>;
+}
+
+#[derive(PartialEq)]
+enum RecoverState {
+    /// No checkpoint entry found, read until end of log.
+    None,
+    /// Begin checkpoint entry found, read until the start entry
+    /// of every transaction in the checkpoint is read.
+    Begin(HashSet<u64>),
+    /// End checkpoint entry found, read until a begin
+    /// checkpoint entry is found.
+    End,
 }
 
 #[derive(PartialEq)]

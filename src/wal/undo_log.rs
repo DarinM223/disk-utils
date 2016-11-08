@@ -4,24 +4,12 @@ use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::Path;
 
-use wal::{append_to_file, LogData, LogStore, read_serializable_backwards, Serializable,
-          split_bytes_into_records};
+use wal::{append_to_file, LogData, LogStore, read_serializable_backwards, RecoverState,
+          Serializable, split_bytes_into_records};
 use wal::entries::{ChangeEntry, Checkpoint, InsertEntry, SingleLogEntry, Transaction};
 use wal::iterator::WalIterator;
 
 const MAX_RECORD_SIZE: usize = 1024;
-
-#[derive(PartialEq)]
-enum RecoverState {
-    /// No checkpoint entry found, read until end of log.
-    None,
-    /// Begin checkpoint entry found, read until the start entry
-    /// of every transaction in the checkpoint is read.
-    Begin(HashSet<u64>),
-    /// End checkpoint entry found, read until a begin
-    /// checkpoint entry is found.
-    End,
-}
 
 pub struct UndoLog<Data: LogData, Store: LogStore<Data>> {
     file: File,
@@ -148,8 +136,8 @@ impl<Data, Store> UndoLog<Data, Store>
     }
 
     fn recover(&mut self) -> io::Result<()> {
-        let mut finished_transactions = HashSet::new();
-        let mut unfinished_transactions = HashSet::new();
+        let mut finished = HashSet::new();
+        let mut unfinished = HashSet::new();
         let mut state = RecoverState::None;
 
         {
@@ -157,10 +145,10 @@ impl<Data, Store> UndoLog<Data, Store>
             while let Ok(data) = read_serializable_backwards::<SingleLogEntry<Data>>(&mut iter) {
                 match data {
                     SingleLogEntry::Transaction(Transaction::Commit(id)) => {
-                        finished_transactions.insert(id);
+                        finished.insert(id);
                     }
                     SingleLogEntry::Transaction(Transaction::Abort(id)) => {
-                        finished_transactions.insert(id);
+                        finished.insert(id);
                     }
                     SingleLogEntry::Transaction(Transaction::Start(id)) => {
                         if let RecoverState::Begin(ref mut transactions) = state {
@@ -171,15 +159,15 @@ impl<Data, Store> UndoLog<Data, Store>
                         }
                     }
                     SingleLogEntry::InsertEntry(entry) => {
-                        if !finished_transactions.contains(&entry.tid) {
+                        if !finished.contains(&entry.tid) {
                             self.store.remove(&entry.key);
-                            unfinished_transactions.insert(entry.tid);
+                            unfinished.insert(entry.tid);
                         }
                     }
                     SingleLogEntry::ChangeEntry(entry) => {
-                        if !finished_transactions.contains(&entry.tid) {
+                        if !finished.contains(&entry.tid) {
                             self.store.update(entry.key, entry.value);
-                            unfinished_transactions.insert(entry.tid);
+                            unfinished.insert(entry.tid);
                         }
                     }
                     SingleLogEntry::Checkpoint(Checkpoint::Begin(transactions)) => {
@@ -205,13 +193,13 @@ impl<Data, Store> UndoLog<Data, Store>
 
         // Flush undo store changes first before writing aborts to the log.
         self.store.flush()?;
-        for tid in unfinished_transactions.iter() {
+        for tid in unfinished.iter() {
             self.mem_log.push_back(SingleLogEntry::Transaction(Transaction::Abort(*tid)));
         }
 
         // Set the last tid to the largest tid.
-        let max_unfinished = unfinished_transactions.into_iter().max().unwrap_or(0);
-        let max_finished = finished_transactions.into_iter().max().unwrap_or(0);
+        let max_unfinished = unfinished.into_iter().max().unwrap_or(0);
+        let max_finished = finished.into_iter().max().unwrap_or(0);
         self.last_tid = cmp::max(max_unfinished, max_finished);
 
         self.flush()?;
