@@ -72,3 +72,43 @@ fn test_read_serializable() {
         }
     }).unwrap();
 }
+
+#[test]
+fn test_read_serializable_back_and_forth() {
+    create_test_file("./files/read_serializable_back_and_forth", |_, mut file| {
+        let entries: Vec<ChangeEntry<MyLogData>> = vec![
+            ChangeEntry {
+                tid: 123,
+                key: 20,
+                value: "Hello world!".to_string(),
+            },
+            ChangeEntry {
+                tid: 234,
+                key: 50,
+                value: "Foo Bar".to_string(),
+            },
+            ChangeEntry {
+                tid: 90,
+                key: 60,
+                value: "ABC".to_string(),
+            }
+        ];
+
+        for entry in entries.iter() {
+            let mut bytes = Vec::new();
+            entry.serialize(&mut bytes).unwrap();
+            let records = split_bytes_into_records(bytes, 1).unwrap();
+            for record in records.iter() {
+                append_to_file(&mut file, record).unwrap();
+            }
+        }
+
+        {
+            let mut iter = WalIterator::new(&mut file, ReadDirection::Forward).unwrap();
+            assert_eq!(read_serializable::<ChangeEntry<MyLogData>>(&mut iter).unwrap(), entries[0]);
+            assert_eq!(read_serializable::<ChangeEntry<MyLogData>>(&mut iter).unwrap(), entries[1]);
+            assert_eq!(read_serializable_backwards::<ChangeEntry<MyLogData>>(&mut iter).unwrap(), entries[1]);
+            assert_eq!(read_serializable_backwards::<ChangeEntry<MyLogData>>(&mut iter).unwrap(), entries[0]);
+        }
+    }).unwrap();
+}

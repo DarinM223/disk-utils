@@ -1,18 +1,10 @@
 use std::fs::File;
 use std::io;
 use std::io::{Read, Seek, SeekFrom};
+use std::mem;
 use std::result;
 
 use wal::record::{BLOCK_SIZE, Record};
-
-/// Calls a method for an object contained inside
-/// an option and returns an option of the result.
-macro_rules! call_opt {
-    ($var:expr, $meth:ident($( $param:expr ),*)) => (match $var {
-        Some(ref v) => Some(v.$meth($($param),*)),
-        None => None,
-    });
-}
 
 #[derive(PartialEq)]
 pub enum ReadDirection {
@@ -45,7 +37,7 @@ pub struct WalIterator<'a> {
 
 impl<'a> WalIterator<'a> {
     pub fn new<'b>(file: &'b mut File, direction: ReadDirection) -> Result<WalIterator<'b>> {
-        let manager = BlockManager::new(file, &direction)?;
+        let mut manager = BlockManager::new(file, &direction)?;
         let block = manager.curr();
         let index = match direction {
             ReadDirection::Forward => -1,
@@ -154,8 +146,8 @@ impl<'a> BlockManager<'a> {
         })
     }
 
-    fn curr(&self) -> Vec<Record> {
-        self.block.clone()
+    fn curr(&mut self) -> Vec<Record> {
+        mem::replace(&mut self.block, Vec::new())
     }
 
     fn next(&mut self) -> Result<()> {

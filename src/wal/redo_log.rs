@@ -163,9 +163,6 @@ impl<Data, Store> RedoLog<Data, Store>
                 }
             }
 
-            // TODO(DarinM223): check if iterator is in correct position right here (might need to
-            // move the iterator up one).
-
             // Second pass:
             while let Ok(data) = read_serializable::<SingleLogEntry<Data>>(&mut iter) {
                 if let SingleLogEntry::ChangeEntry(entry) = data {
