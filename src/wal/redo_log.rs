@@ -1,12 +1,11 @@
 use std::collections::{VecDeque, HashMap, HashSet};
 use std::fs::{File, OpenOptions};
-use std::io;
 use std::path::Path;
 
 use wal::{append_to_file, LogData, LogStore, read_serializable, read_serializable_backwards,
-          RecoverState, Serializable, split_bytes_into_records};
+          RecoverState, Result, Serializable, split_bytes_into_records};
 use wal::entries::{ChangeEntry, Checkpoint, SingleLogEntry, Transaction};
-use wal::iterator::WalIterator;
+use wal::iterator::{ReadDirection, WalIterator};
 
 const MAX_RECORD_SIZE: usize = 1024;
 
@@ -23,9 +22,7 @@ impl<Data, Store> RedoLog<Data, Store>
     where Data: LogData,
           Store: LogStore<Data>
 {
-    pub fn new<P: AsRef<Path> + ?Sized>(path: &P,
-                                        store: Store)
-                                        -> io::Result<RedoLog<Data, Store>> {
+    pub fn new<P: AsRef<Path> + ?Sized>(path: &P, store: Store) -> Result<RedoLog<Data, Store>> {
         let file = OpenOptions::new()
             .read(true)
             .append(true)
@@ -47,7 +44,7 @@ impl<Data, Store> RedoLog<Data, Store>
         self.mem_log.clone().into_iter().collect()
     }
 
-    pub fn checkpoint(&mut self) -> io::Result<()> {
+    pub fn checkpoint(&mut self) -> Result<()> {
         let transactions: Vec<_> = self.active_tids.clone().into_iter().collect();
         let entry = SingleLogEntry::Checkpoint(Checkpoint::Begin(transactions.clone()));
 
@@ -91,7 +88,7 @@ impl<Data, Store> RedoLog<Data, Store>
         }
     }
 
-    pub fn commit(&mut self, tid: u64) -> io::Result<()> {
+    pub fn commit(&mut self, tid: u64) -> Result<()> {
         if self.active_tids.contains(&tid) {
             let entry = SingleLogEntry::Transaction(Transaction::Commit(tid));
             self.mem_log.push_back(entry);
@@ -106,7 +103,7 @@ impl<Data, Store> RedoLog<Data, Store>
         Ok(())
     }
 
-    fn flush(&mut self) -> io::Result<()> {
+    fn flush(&mut self) -> Result<()> {
         for entry in self.mem_log.iter_mut() {
             let mut bytes = Vec::new();
             entry.serialize(&mut bytes)?;
@@ -120,14 +117,14 @@ impl<Data, Store> RedoLog<Data, Store>
         Ok(())
     }
 
-    fn recover(&mut self) -> io::Result<()> {
+    fn recover(&mut self) -> Result<()> {
         let mut committed = HashSet::new();
         let mut uncommitted = HashSet::new();
         let mut aborted = HashSet::new();
         let mut state = RecoverState::None;
 
         {
-            let mut iter = WalIterator::new(&mut self.file)?;
+            let mut iter = WalIterator::new(&mut self.file, ReadDirection::Backward)?;
 
             // First pass:
             while let Ok(data) = read_serializable_backwards::<SingleLogEntry<Data>>(&mut iter) {
@@ -206,22 +203,22 @@ struct Changes<Data: LogData> {
 impl<Data> Changes<Data>
     where Data: LogData
 {
-    pub fn new() -> Changes<Data> {
+    fn new() -> Changes<Data> {
         Changes {
             committed_tids: HashSet::new(),
             transaction_changes: Vec::new(),
         }
     }
 
-    pub fn write(&mut self, tid: u64, key: Data::Key, val: Data::Value) {
+    fn write(&mut self, tid: u64, key: Data::Key, val: Data::Value) {
         self.transaction_changes.push((tid, key, val));
     }
 
-    pub fn commit(&mut self, tid: u64) {
+    fn commit(&mut self, tid: u64) {
         self.committed_tids.insert(tid);
     }
 
-    pub fn flush_changes(&self) -> HashMap<Data::Key, Data::Value> {
+    fn flush_changes(&self) -> HashMap<Data::Key, Data::Value> {
         let mut map = HashMap::new();
         for &(tid, ref key, ref value) in self.transaction_changes.iter() {
             if self.committed_tids.contains(&tid) {

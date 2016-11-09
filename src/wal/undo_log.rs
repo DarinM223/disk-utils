@@ -1,13 +1,12 @@
 use std::cmp;
 use std::collections::{VecDeque, HashSet};
 use std::fs::{File, OpenOptions};
-use std::io;
 use std::path::Path;
 
-use wal::{append_to_file, LogData, LogStore, read_serializable_backwards, RecoverState,
+use wal::{append_to_file, LogData, LogStore, read_serializable_backwards, RecoverState, Result,
           Serializable, split_bytes_into_records};
 use wal::entries::{ChangeEntry, Checkpoint, InsertEntry, SingleLogEntry, Transaction};
-use wal::iterator::WalIterator;
+use wal::iterator::{ReadDirection, WalIterator};
 
 const MAX_RECORD_SIZE: usize = 1024;
 
@@ -24,9 +23,7 @@ impl<Data, Store> UndoLog<Data, Store>
     where Data: LogData,
           Store: LogStore<Data>
 {
-    pub fn new<P: AsRef<Path> + ?Sized>(path: &P,
-                                        store: Store)
-                                        -> io::Result<UndoLog<Data, Store>> {
+    pub fn new<P: AsRef<Path> + ?Sized>(path: &P, store: Store) -> Result<UndoLog<Data, Store>> {
         let file = OpenOptions::new()
             .read(true)
             .append(true)
@@ -48,7 +45,7 @@ impl<Data, Store> UndoLog<Data, Store>
         self.mem_log.clone().into_iter().collect()
     }
 
-    pub fn checkpoint(&mut self) -> io::Result<()> {
+    pub fn checkpoint(&mut self) -> Result<()> {
         if self.checkpoint_tids.is_none() {
             let transactions: Vec<_> = self.active_tids.clone().into_iter().collect();
             let entry = SingleLogEntry::Checkpoint(Checkpoint::Begin(transactions.clone()));
@@ -88,7 +85,7 @@ impl<Data, Store> UndoLog<Data, Store>
         }
     }
 
-    pub fn commit(&mut self, tid: u64) -> io::Result<()> {
+    pub fn commit(&mut self, tid: u64) -> Result<()> {
         if self.active_tids.contains(&tid) {
             self.flush()?;
             self.store.flush()?;
@@ -121,7 +118,7 @@ impl<Data, Store> UndoLog<Data, Store>
         Ok(())
     }
 
-    fn flush(&mut self) -> io::Result<()> {
+    fn flush(&mut self) -> Result<()> {
         for entry in self.mem_log.iter_mut() {
             let mut bytes = Vec::new();
             entry.serialize(&mut bytes)?;
@@ -135,13 +132,13 @@ impl<Data, Store> UndoLog<Data, Store>
         Ok(())
     }
 
-    fn recover(&mut self) -> io::Result<()> {
+    fn recover(&mut self) -> Result<()> {
         let mut finished = HashSet::new();
         let mut unfinished = HashSet::new();
         let mut state = RecoverState::None;
 
         {
-            let mut iter = WalIterator::new(&mut self.file)?;
+            let mut iter = WalIterator::new(&mut self.file, ReadDirection::Backward)?;
             while let Ok(data) = read_serializable_backwards::<SingleLogEntry<Data>>(&mut iter) {
                 match data {
                     SingleLogEntry::Transaction(Transaction::Commit(id)) => {

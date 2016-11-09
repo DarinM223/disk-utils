@@ -4,7 +4,7 @@ use disk_utils::testing::create_test_file;
 use disk_utils::wal::{append_to_file, LogData, read_serializable, read_serializable_backwards,
                       Serializable, split_bytes_into_records};
 use disk_utils::wal::entries::ChangeEntry;
-use disk_utils::wal::iterator::WalIterator;
+use disk_utils::wal::iterator::{ReadDirection, WalIterator};
 use disk_utils::wal::record::RecordType;
 
 #[derive(Clone, PartialEq, Debug)]
@@ -60,12 +60,12 @@ fn test_read_serializable() {
         }
 
         {
-            let mut iter = WalIterator::new(&mut file).unwrap();
+            let mut iter = WalIterator::new(&mut file, ReadDirection::Forward).unwrap();
             let result_entry = read_serializable::<ChangeEntry<MyLogData>>(&mut iter).unwrap();
             assert_eq!(entry, result_entry);
         }
         {
-            let mut iter = WalIterator::new(&mut file).unwrap();
+            let mut iter = WalIterator::new(&mut file, ReadDirection::Backward).unwrap();
             let result_entry = read_serializable_backwards::<ChangeEntry<MyLogData>>(&mut iter)
                 .unwrap();
             assert_eq!(entry, result_entry);

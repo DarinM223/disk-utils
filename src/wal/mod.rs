@@ -5,7 +5,7 @@ pub mod redo_log;
 pub mod serializable;
 pub mod undo_log;
 
-use self::iterator::WalIterator;
+use self::iterator::{BlockError, WalIterator};
 use self::record::{BLOCK_SIZE, Record, RecordType};
 
 use std::collections::HashSet;
@@ -14,6 +14,7 @@ use std::fs::File;
 use std::hash::Hash;
 use std::io;
 use std::io::{Read, Write};
+use std::result;
 
 pub trait Serializable: Sized {
     fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()>;
@@ -33,6 +34,33 @@ pub trait LogStore<Data: LogData> {
     fn flush_change(&mut self, key: Data::Key, val: Data::Value) -> io::Result<()>;
 }
 
+#[derive(Debug)]
+pub enum LogError {
+    IoError(io::Error),
+    BlockError(BlockError),
+    SerializeError(SerializeError),
+}
+
+impl From<io::Error> for LogError {
+    fn from(err: io::Error) -> LogError {
+        LogError::IoError(err)
+    }
+}
+
+impl From<BlockError> for LogError {
+    fn from(err: BlockError) -> LogError {
+        LogError::BlockError(err)
+    }
+}
+
+impl From<SerializeError> for LogError {
+    fn from(err: SerializeError) -> LogError {
+        LogError::SerializeError(err)
+    }
+}
+
+pub type Result<T> = result::Result<T, LogError>;
+
 #[derive(PartialEq)]
 enum RecoverState {
     /// No checkpoint entry found, read until end of log.
@@ -45,93 +73,100 @@ enum RecoverState {
     End,
 }
 
+#[derive(Debug)]
+pub enum SerializeError {
+    IoError(io::Error),
+    InvalidTransfer(RecordType),
+    OutOfRecords,
+}
+
+impl From<io::Error> for SerializeError {
+    fn from(err: io::Error) -> SerializeError {
+        SerializeError::IoError(err)
+    }
+}
+
 #[derive(PartialEq)]
-enum SerializableState {
+enum SerializeState {
     None,
     First,
     Middle,
 }
 
-pub fn read_serializable<S: Serializable>(iter: &mut WalIterator) -> io::Result<S> {
+pub type SerializeResult<T> = result::Result<T, SerializeError>;
+
+pub fn read_serializable<S: Serializable>(iter: &mut WalIterator) -> SerializeResult<S> {
     let mut buf = Vec::new();
-    let mut state = SerializableState::None;
+    let mut state = SerializeState::None;
     while let Some(mut record) = iter.next() {
         match record.record_type {
             RecordType::Zero | RecordType::Full => {
-                return S::deserialize(&mut &record.payload[..]);
+                return Ok(S::deserialize(&mut &record.payload[..])?);
             }
             RecordType::First => {
-                if state != SerializableState::None {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData,
-                                              "Invalid transfer to first state"));
+                if state != SerializeState::None {
+                    return Err(SerializeError::InvalidTransfer(RecordType::First));
                 }
-                state = SerializableState::First;
+                state = SerializeState::First;
                 buf.append(&mut record.payload);
             }
             RecordType::Middle => {
-                if state != SerializableState::First && state != SerializableState::Middle {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData,
-                                              "Invalid transfer to middle state"));
+                if state != SerializeState::First && state != SerializeState::Middle {
+                    return Err(SerializeError::InvalidTransfer(RecordType::Middle));
                 }
-                state = SerializableState::Middle;
+                state = SerializeState::Middle;
                 buf.append(&mut record.payload);
             }
             RecordType::Last => {
-                if state != SerializableState::Middle {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData,
-                                              "Invalid transfer to last state"));
+                if state != SerializeState::Middle {
+                    return Err(SerializeError::InvalidTransfer(RecordType::Last));
                 }
                 buf.append(&mut record.payload);
-                return S::deserialize(&mut &buf[..]);
+                return Ok(S::deserialize(&mut &buf[..])?);
             }
         }
     }
 
-    Err(io::Error::new(io::ErrorKind::UnexpectedEof,
-                       "Ran out of records before attempting to deserialize"))
+    Err(SerializeError::OutOfRecords)
 }
 
-pub fn read_serializable_backwards<S: Serializable>(iter: &mut WalIterator) -> io::Result<S> {
+pub fn read_serializable_backwards<S: Serializable>(iter: &mut WalIterator) -> SerializeResult<S> {
     let mut buf = Vec::new();
-    let mut state = SerializableState::None;
+    let mut state = SerializeState::None;
     while let Some(mut record) = iter.next_back() {
         match record.record_type {
             RecordType::Zero | RecordType::Full => {
-                return S::deserialize(&mut &record.payload[..]);
+                return Ok(S::deserialize(&mut &record.payload[..])?);
             }
             RecordType::First => {
-                if state != SerializableState::Middle {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData,
-                                              "Invalid transfer to last state"));
+                if state != SerializeState::Middle {
+                    return Err(SerializeError::InvalidTransfer(RecordType::First));
                 }
                 record.payload.reverse();
                 buf.append(&mut record.payload);
                 buf.reverse();
-                return S::deserialize(&mut &buf[..]);
+                return Ok(S::deserialize(&mut &buf[..])?);
             }
             RecordType::Middle => {
-                if state != SerializableState::First && state != SerializableState::Middle {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData,
-                                              "Invalid transfer to middle state"));
+                if state != SerializeState::First && state != SerializeState::Middle {
+                    return Err(SerializeError::InvalidTransfer(RecordType::Middle));
                 }
-                state = SerializableState::Middle;
+                state = SerializeState::Middle;
                 record.payload.reverse();
                 buf.append(&mut record.payload);
             }
             RecordType::Last => {
-                if state != SerializableState::None {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData,
-                                              "Invalid transfer to first state"));
+                if state != SerializeState::None {
+                    return Err(SerializeError::InvalidTransfer(RecordType::Last));
                 }
-                state = SerializableState::First;
+                state = SerializeState::First;
                 record.payload.reverse();
                 buf.append(&mut record.payload);
             }
         }
     }
 
-    Err(io::Error::new(io::ErrorKind::UnexpectedEof,
-                       "Ran out of records before attempting to deserialize"))
+    Err(SerializeError::OutOfRecords)
 }
 
 pub fn split_bytes_into_records(bytes: Vec<u8>, max_record_size: usize) -> io::Result<Vec<Record>> {

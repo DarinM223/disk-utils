@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 use disk_utils::testing::create_test_file;
 use disk_utils::wal::{LogData, LogStore, read_serializable};
 use disk_utils::wal::entries::{ChangeEntry, Checkpoint, InsertEntry, SingleLogEntry, Transaction};
-use disk_utils::wal::iterator::WalIterator;
+use disk_utils::wal::iterator::{ReadDirection, WalIterator};
 use disk_utils::wal::undo_log::UndoLog;
 
 #[derive(Clone, PartialEq, Debug)]
@@ -131,7 +131,7 @@ fn test_commit() {
                  }),
                  SingleLogEntry::Transaction(Transaction::Commit(1))]
                 .into_iter();
-        let mut iter = WalIterator::new(&mut file).unwrap();
+        let mut iter = WalIterator::new(&mut file, ReadDirection::Forward).unwrap();
         while let Ok(data) = read_serializable::<SingleLogEntry<MyLogData>>(&mut iter) {
             assert_eq!(data, expected_entries.next().unwrap());
         }
@@ -175,7 +175,7 @@ fn test_recover() {
                  SingleLogEntry::InsertEntry(InsertEntry { tid: 2, key: 30 }),
                  SingleLogEntry::Transaction(Transaction::Abort(2))]
                 .into_iter();
-        let mut iter = WalIterator::new(&mut file).unwrap();
+        let mut iter = WalIterator::new(&mut file, ReadDirection::Forward).unwrap();
         while let Ok(data) = read_serializable::<SingleLogEntry<MyLogData>>(&mut iter) {
             assert_eq!(data, expected_entries.next().unwrap());
         }
@@ -246,7 +246,7 @@ fn test_multiple_recover() {
                  SingleLogEntry::InsertEntry(InsertEntry { tid: 4, key: 50 }),
                  SingleLogEntry::Transaction(Transaction::Abort(4))]
                 .into_iter();
-        let mut iter = WalIterator::new(&mut file).unwrap();
+        let mut iter = WalIterator::new(&mut file, ReadDirection::Forward).unwrap();
         while let Ok(data) = read_serializable::<SingleLogEntry<MyLogData>>(&mut iter) {
             assert_eq!(data, expected_entries.next().unwrap());
         }
@@ -291,7 +291,7 @@ fn test_add_end_checkpoint() {
                  SingleLogEntry::Transaction(Transaction::Commit(2)),
                  SingleLogEntry::Checkpoint(Checkpoint::End)]
                 .into_iter();
-        let mut iter = WalIterator::new(&mut file).unwrap();
+        let mut iter = WalIterator::new(&mut file, ReadDirection::Forward).unwrap();
         while let Ok(data) = read_serializable::<SingleLogEntry<MyLogData>>(&mut iter) {
             if let SingleLogEntry::Checkpoint(Checkpoint::Begin(mut data)) = data {
                 data.sort();
