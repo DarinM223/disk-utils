@@ -20,7 +20,8 @@ impl LogData for MyLogData {
 
 #[derive(Clone)]
 struct MyStore<Data: LogData> {
-    map: Arc<RwLock<HashMap<Data::Key, Data::Value>>>,
+    data: Arc<RwLock<HashMap<Data::Key, Data::Value>>>,
+    flushed_data: Arc<RwLock<HashMap<Data::Key, Data::Value>>>,
     flush_err: Arc<RwLock<bool>>,
 }
 
@@ -29,7 +30,8 @@ impl<Data> MyStore<Data>
 {
     pub fn new() -> MyStore<Data> {
         MyStore {
-            map: Arc::new(RwLock::new(HashMap::new())),
+            data: Arc::new(RwLock::new(HashMap::new())),
+            flushed_data: Arc::new(RwLock::new(HashMap::new())),
             flush_err: Arc::new(RwLock::new(false)),
         }
     }
@@ -38,8 +40,12 @@ impl<Data> MyStore<Data>
         *self.flush_err.write().unwrap() = flush_err;
     }
 
-    pub fn clear(&mut self) {
-        self.map.write().unwrap().clear();
+    pub fn get_flushed(&self, key: &Data::Key) -> Option<Data::Value> {
+        self.flushed_data.read().unwrap().get(key).cloned()
+    }
+
+    pub fn discard_changes(&mut self) {
+        *self.data.write().unwrap() = self.flushed_data.read().unwrap().clone();
     }
 }
 
@@ -47,18 +53,19 @@ impl<Data> LogStore<Data> for MyStore<Data>
     where Data: LogData
 {
     fn get(&self, key: &Data::Key) -> Option<Data::Value> {
-        self.map.read().unwrap().get(key).cloned()
+        self.data.read().unwrap().get(key).cloned()
     }
 
     fn remove(&mut self, key: &Data::Key) {
-        self.map.write().unwrap().remove(key);
+        self.data.write().unwrap().remove(key);
     }
 
     fn update(&mut self, key: Data::Key, val: Data::Value) {
-        self.map.write().unwrap().insert(key, val);
+        self.data.write().unwrap().insert(key, val);
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        *self.flushed_data.write().unwrap() = self.data.read().unwrap().clone();
         if *self.flush_err.read().unwrap() {
             Err(io::Error::new(io::ErrorKind::Interrupted, "Flush error occurred"))
         } else {
@@ -66,7 +73,8 @@ impl<Data> LogStore<Data> for MyStore<Data>
         }
     }
 
-    fn flush_change(&mut self, _: Data::Key, _: Data::Value) -> io::Result<()> {
+    fn flush_change(&mut self, key: Data::Key, val: Data::Value) -> io::Result<()> {
+        self.flushed_data.write().unwrap().insert(key, val);
         if *self.flush_err.read().unwrap() {
             Err(io::Error::new(io::ErrorKind::Interrupted, "Flush error occurred"))
         } else {
@@ -160,19 +168,18 @@ fn test_recover() {
             redo_log.write(tid, 20, "Hello".to_string());
             redo_log.commit(tid).unwrap();
 
-            store.set_flush_err(true);
-
             let tid = redo_log.start();
             redo_log.write(tid, 20, "World".to_string());
             redo_log.write(tid, 30, "Hello".to_string());
-            assert!(redo_log.commit(tid).is_err());
 
-            store.set_flush_err(false);
+            let tid = redo_log.start();
+            redo_log.commit(tid).unwrap();
         }
 
+        store.discard_changes();
         // Create a new redo log which should automatically recover data.
         let mut redo_log = RedoLog::new(path, store.clone()).unwrap();
-        assert_eq!(redo_log.start(), 3);
+        assert_eq!(redo_log.start(), 4);
 
         let mut expected_entries =
             vec![SingleLogEntry::Transaction(Transaction::Start(1)),
@@ -193,15 +200,17 @@ fn test_recover() {
                      key: 30,
                      value: "Hello".to_string(),
                  }),
-                 SingleLogEntry::Transaction(Transaction::Commit(2))]
+                 SingleLogEntry::Transaction(Transaction::Start(3)),
+                 SingleLogEntry::Transaction(Transaction::Commit(3)),
+                 SingleLogEntry::Transaction(Transaction::Abort(2))]
                 .into_iter();
         let mut iter = WalIterator::new(&mut file, ReadDirection::Forward).unwrap();
         while let Ok(data) = read_serializable::<SingleLogEntry<MyLogData>>(&mut iter) {
             assert_eq!(data, expected_entries.next().unwrap());
         }
 
-        assert_eq!(store.get(&20), Some("World".to_string()));
-        assert_eq!(store.get(&30), Some("Hello".to_string()));
+        assert_eq!(store.get_flushed(&20), Some("Hello".to_string()));
+        assert_eq!(store.get_flushed(&30), None);
     }).unwrap();
 }
 
@@ -230,7 +239,7 @@ fn test_multiple_recover() {
             redo_log.write(tid4, 50, "Hello".to_string());
         }
 
-        store.clear();
+        store.discard_changes();
 
         // Create a new redo log which should automatically recover data.
         let mut redo_log = RedoLog::new(path, store.clone()).unwrap();
@@ -282,10 +291,10 @@ fn test_multiple_recover() {
         }
 
         // Test expected state after recovery:
-        assert_eq!(store.get(&20), Some("World".to_string()));
-        assert_eq!(store.get(&30), Some("Blah".to_string()));
-        assert_eq!(store.get(&40), Some("Foo".to_string()));
-        assert_eq!(store.get(&50), None);
+        assert_eq!(store.get_flushed(&20), Some("World".to_string()));
+        assert_eq!(store.get_flushed(&30), Some("Blah".to_string()));
+        assert_eq!(store.get_flushed(&40), Some("Foo".to_string()));
+        assert_eq!(store.get_flushed(&50), None);
     }).unwrap();
 }
 
@@ -366,15 +375,54 @@ fn test_checkpoint_recover_after_end() {
             redo_log.commit(tid5).unwrap();
         }
 
-        store.clear();
+        store.discard_changes();
 
         // Create a new redo log which should automatically recover data.
         let mut redo_log = RedoLog::new(path, store.clone()).unwrap();
         assert_eq!(redo_log.start(), 6);
 
-        assert_eq!(store.get(&20), Some("A".to_string()));
-        assert_eq!(store.get(&30), Some("C".to_string()));
-        assert_eq!(store.get(&50), Some("D".to_string()));
-        assert_eq!(store.get(&60), None);
+        assert_eq!(store.get_flushed(&20), Some("A".to_string()));
+        assert_eq!(store.get_flushed(&30), Some("C".to_string()));
+        assert_eq!(store.get_flushed(&50), Some("D".to_string()));
+        assert_eq!(store.get_flushed(&60), None);
+    }).unwrap();
+}
+
+#[test]
+fn test_checkpoint_flushed_changes() {
+    create_test_file("./files/checkpoint_flushed_changes", |path, _| {
+        let mut store: MyStore<MyLogData> = MyStore::new();
+        {
+            let mut redo_log = RedoLog::new(path, store.clone()).unwrap();
+            let tid1 = redo_log.start();
+            let tid2 = redo_log.start();
+
+            redo_log.write(tid1, 20, "Hello".to_string());
+            redo_log.write(tid2, 30, "World".to_string());
+            redo_log.write(tid2, 20, "World".to_string());
+            redo_log.write(tid1, 30, "Hello".to_string());
+
+            redo_log.commit(tid2).unwrap();
+            // Should  flush (20 -> "World") and (30 -> "World") to disk.
+            redo_log.checkpoint().unwrap();
+            assert_eq!(store.get_flushed(&20), Some("World".to_string()));
+            assert_eq!(store.get_flushed(&30), Some("World".to_string()));
+
+            redo_log.write(tid1, 40, "New key".to_string());
+
+            let tid3 = redo_log.start();
+            let tid4 = redo_log.start();
+            redo_log.write(tid3, 50, "New key".to_string());
+            redo_log.write(tid4, 50, "New new key".to_string());
+            redo_log.commit(tid3).unwrap();
+        }
+
+        store.discard_changes();
+        // Create a new redo log which should automatically recover data.
+        let _ = RedoLog::new(path, store.clone()).unwrap();
+        assert_eq!(store.get_flushed(&20), Some("World".to_string()));
+        assert_eq!(store.get_flushed(&30), Some("World".to_string()));
+        assert_eq!(store.get_flushed(&40), None);
+        assert_eq!(store.get_flushed(&50), Some("New key".to_string()));
     }).unwrap();
 }

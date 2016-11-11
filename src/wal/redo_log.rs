@@ -94,7 +94,6 @@ impl<Data, Store> RedoLog<Data, Store>
             self.mem_log.push_back(entry);
 
             self.flush()?;
-            self.store.flush()?;
 
             self.active_tids.remove(&tid);
             self.changes.commit(tid);
