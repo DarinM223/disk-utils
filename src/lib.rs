@@ -4,8 +4,10 @@ extern crate crc;
 pub mod testing;
 pub mod wal;
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {}
+use std::io;
+use std::io::{Read, Write};
+
+pub trait Serializable: Sized {
+    fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()>;
+    fn deserialize<R: Read>(bytes: &mut R) -> io::Result<Self>;
 }

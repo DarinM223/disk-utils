@@ -1,7 +1,9 @@
 use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
+
 use std::io;
 use std::io::{Cursor, Read, Write};
-use wal::Serializable;
+
+use super::super::Serializable;
 
 impl Serializable for String {
     fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()> {

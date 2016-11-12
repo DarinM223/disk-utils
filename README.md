@@ -8,3 +8,4 @@ Data structures that use the disk.
 ## Implemented:
 
 - Undo log
+- Redo log

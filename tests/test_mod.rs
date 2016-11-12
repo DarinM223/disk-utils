@@ -1,8 +1,9 @@
 extern crate disk_utils;
 
+use disk_utils::Serializable;
 use disk_utils::testing::create_test_file;
 use disk_utils::wal::{append_to_file, LogData, read_serializable, read_serializable_backwards,
-                      Serializable, split_bytes_into_records};
+                      split_bytes_into_records};
 use disk_utils::wal::entries::ChangeEntry;
 use disk_utils::wal::iterator::{ReadDirection, WalIterator};
 use disk_utils::wal::record::RecordType;

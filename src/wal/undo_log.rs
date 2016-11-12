@@ -3,8 +3,10 @@ use std::collections::{VecDeque, HashSet};
 use std::fs::{File, OpenOptions};
 use std::path::Path;
 
+use super::super::Serializable;
+
 use wal::{append_to_file, LogData, LogStore, read_serializable_backwards, RecoverState, Result,
-          Serializable, split_bytes_into_records};
+          split_bytes_into_records};
 use wal::entries::{ChangeEntry, Checkpoint, InsertEntry, SingleLogEntry, Transaction};
 use wal::iterator::{ReadDirection, WalIterator};
 

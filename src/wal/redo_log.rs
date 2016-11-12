@@ -2,8 +2,10 @@ use std::collections::{VecDeque, HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::path::Path;
 
+use super::super::Serializable;
+
 use wal::{append_to_file, LogData, LogStore, read_serializable, read_serializable_backwards,
-          RecoverState, Result, Serializable, split_bytes_into_records};
+          RecoverState, Result, split_bytes_into_records};
 use wal::entries::{ChangeEntry, Checkpoint, SingleLogEntry, Transaction};
 use wal::iterator::{ReadDirection, WalIterator};
 
@@ -53,7 +55,6 @@ impl<Data, Store> RedoLog<Data, Store>
         self.flush()?;
 
         // Ensure that all changes committed before the begin checkpoint are flushed to disk.
-        // TODO(DarinM223): verify that this is correct.
         for (key, val) in self.changes.flush_changes() {
             self.store.flush_change(key, val)?;
         }

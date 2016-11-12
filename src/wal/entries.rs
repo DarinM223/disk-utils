@@ -1,7 +1,9 @@
 use std::io;
 use std::io::{Read, Write};
 
-use wal::{LogData, Serializable};
+use super::super::Serializable;
+
+use wal::LogData;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Transaction {

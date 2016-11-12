@@ -1,7 +1,12 @@
 [package]
 name = "disk_utils"
-version = "0.1.0"
+version = "0.0.1"
 authors = ["Darin Minamoto <darinm223@gmail.com>"]
+description = "Data structures that use the disk"
+repository = "https://github.com/DarinM223/disk-utils"
+readme = "README.md"
+keywords = ["wal", "disk", "log", "data-structure"]
+license = "MIT"
 
 [dependencies]
 byteorder = "0.5"

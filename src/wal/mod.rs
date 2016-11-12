@@ -13,13 +13,10 @@ use std::fmt::Debug;
 use std::fs::File;
 use std::hash::Hash;
 use std::io;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::result;
 
-pub trait Serializable: Sized {
-    fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()>;
-    fn deserialize<R: Read>(bytes: &mut R) -> io::Result<Self>;
-}
+use super::Serializable;
 
 pub trait LogData: Clone + PartialEq + Debug {
     type Key: Clone + PartialEq + Eq + Debug + Hash + Serializable;
