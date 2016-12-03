@@ -127,15 +127,11 @@ impl<'a> BlockManager<'a> {
             }
         };
 
-        let block = if check_out_of_bounds(pos, file_len) {
-            Vec::new()
-        } else {
-            match load_block(file, pos) {
-                Ok(block) => block,
-                Err(BlockError::EmptyBlock) |
-                Err(BlockError::OutOfBounds) => Vec::new(),
-                Err(e) => return Err(e),
-            }
+        let block = match check_out_of_bounds(pos, file_len).and_then(|_| load_block(file, pos)) {
+            Ok(block) => block,
+            Err(BlockError::EmptyBlock) |
+            Err(BlockError::OutOfBounds) => Vec::new(),
+            Err(e) => return Err(e),
         };
 
         Ok(BlockManager {
@@ -151,26 +147,18 @@ impl<'a> BlockManager<'a> {
     }
 
     fn next(&mut self) -> Result<()> {
-        if check_out_of_bounds(self.pos, self.len) {
-            return Err(BlockError::OutOfBounds);
-        }
+        check_out_of_bounds(self.pos, self.len)?;
         self.pos += BLOCK_SIZE;
-        if check_out_of_bounds(self.pos, self.len) {
-            return Err(BlockError::OutOfBounds);
-        }
+        check_out_of_bounds(self.pos, self.len)?;
 
         self.block = load_block(self.file, self.pos)?;
         Ok(())
     }
 
     fn prev(&mut self) -> Result<()> {
-        if check_out_of_bounds(self.pos, self.len) {
-            return Err(BlockError::OutOfBounds);
-        }
+        check_out_of_bounds(self.pos, self.len)?;
         self.pos -= BLOCK_SIZE;
-        if check_out_of_bounds(self.pos, self.len) {
-            return Err(BlockError::OutOfBounds);
-        }
+        check_out_of_bounds(self.pos, self.len)?;
 
         self.block = load_block(self.file, self.pos)?;
         Ok(())
@@ -195,9 +183,9 @@ fn load_block(file: &mut File, pos: i64) -> Result<Vec<Record>> {
     Ok(block)
 }
 
-fn check_out_of_bounds(position: i64, file_length: i64) -> bool {
+fn check_out_of_bounds(position: i64, file_length: i64) -> Result<()> {
     if position < 0 || position > file_length {
-        return true;
+        return Err(BlockError::OutOfBounds);
     }
-    false
+    Ok(())
 }
