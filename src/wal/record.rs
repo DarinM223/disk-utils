@@ -3,9 +3,10 @@ use crc::crc32;
 
 use std::io;
 use std::io::{Cursor, Read, Write};
-use std::mem;
 
-#[repr(u8)]
+use enum_primitive::FromPrimitive;
+
+enum_from_primitive! {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RecordType {
     Zero = 1,
@@ -15,13 +16,11 @@ pub enum RecordType {
     Middle = 4,
     Last = 5,
 }
+}
 
 impl RecordType {
     pub fn from_u8(i: u8) -> Option<RecordType> {
-        if i >= RecordType::Zero as u8 && i <= RecordType::Last as u8 {
-            return Some(unsafe { mem::transmute(i) });
-        }
-        None
+        return RecordType::from_i32(i as i32)
     }
 }
 
