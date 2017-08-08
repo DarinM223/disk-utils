@@ -62,14 +62,3 @@ fn test_read_write_invalid_record() {
         panic!("Reading invalid record with a smaller data size should return error");
     }
 }
-
-#[test]
-fn test_enum_primative() {
-    assert_eq!(None, RecordType::from_u8(0 as u8));
-    assert_eq!(Some(RecordType::Zero), RecordType::from_u8(1 as u8));
-    assert_eq!(Some(RecordType::Full), RecordType::from_u8(2 as u8));
-    assert_eq!(Some(RecordType::First), RecordType::from_u8(3 as u8));
-    assert_eq!(Some(RecordType::Middle), RecordType::from_u8(4 as u8));
-    assert_eq!(Some(RecordType::Last), RecordType::from_u8(5 as u8));
-    assert_eq!(None, RecordType::from_u8(6 as u8));
-}

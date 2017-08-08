@@ -18,12 +18,6 @@ pub enum RecordType {
 }
 }
 
-impl RecordType {
-    pub fn from_u8(i: u8) -> Option<RecordType> {
-        return RecordType::from_i32(i as i32)
-    }
-}
-
 /// 32KB Block size.
 pub const BLOCK_SIZE: i64 = 32768;
 /// 7B Header size for record.
