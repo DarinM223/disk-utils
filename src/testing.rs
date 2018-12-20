@@ -28,12 +28,14 @@ impl From<Box<Any + Send + 'static>> for TestFileError {
 
 pub type Result<T> = result::Result<T, TestFileError>;
 
-pub fn create_test_file<P: AsRef<Path> + ?Sized + RefUnwindSafe,
-                        F: FnOnce(&P, File) -> R + UnwindSafe,
-                        R>
-    (path: &P,
-     fun: F)
-     -> Result<R> {
+pub fn create_test_file<
+    P: AsRef<Path> + ?Sized + RefUnwindSafe,
+    F: FnOnce(&P, File) -> R + UnwindSafe,
+    R,
+>(
+    path: &P,
+    fun: F,
+) -> Result<R> {
     let file = OpenOptions::new()
         .read(true)
         .append(true)
@@ -45,14 +47,16 @@ pub fn create_test_file<P: AsRef<Path> + ?Sized + RefUnwindSafe,
     Ok(result?)
 }
 
-pub fn create_two_test_files<P1: AsRef<Path> + ?Sized + RefUnwindSafe,
-                             P2: AsRef<Path> + ?Sized + RefUnwindSafe,
-                             F: FnOnce(&P1, &P2, File, File) -> R + UnwindSafe,
-                             R>
-    (path1: &P1,
-     path2: &P2,
-     fun: F)
-     -> Result<R> {
+pub fn create_two_test_files<
+    P1: AsRef<Path> + ?Sized + RefUnwindSafe,
+    P2: AsRef<Path> + ?Sized + RefUnwindSafe,
+    F: FnOnce(&P1, &P2, File, File) -> R + UnwindSafe,
+    R,
+>(
+    path1: &P1,
+    path2: &P2,
+    fun: F,
+) -> Result<R> {
     let file1 = OpenOptions::new()
         .read(true)
         .append(true)

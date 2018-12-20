@@ -5,34 +5,32 @@ use std::io::{Seek, SeekFrom};
 
 use disk_utils::testing::create_test_file;
 use disk_utils::wal::iterator::{ReadDirection, WalIterator};
-use disk_utils::wal::record::{BLOCK_SIZE, HEADER_SIZE, Record, RecordType};
+use disk_utils::wal::record::{Record, RecordType, BLOCK_SIZE, HEADER_SIZE};
 
 fn test_file(file: &mut File, records: Vec<Record>) {
     // Test going from beginning to end.
-    {
-        let mut count = 0;
-        let iter = WalIterator::new(file, ReadDirection::Forward).unwrap();
-        for (i, record) in iter.enumerate() {
-            assert_eq!(record, records[i]);
-            count += 1;
-        }
-        assert_eq!(count, records.len());
+    let mut count = 0;
+    let iter = WalIterator::new(file, ReadDirection::Forward).unwrap();
+    for (i, record) in iter.enumerate() {
+        assert_eq!(record, records[i]);
+        count += 1;
     }
+    assert_eq!(count, records.len());
 
     file.seek(SeekFrom::Start(0)).unwrap();
 
     // Test going from end to beginning.
-    {
-        let mut count = 0;
-        let mut iter = WalIterator::new(file, ReadDirection::Backward).unwrap();
-        while let Some(record) = iter.next_back() {
-            assert_eq!(record.payload.len(),
-            records[records.len() - count - 1].payload.len());
-            assert_eq!(record, records[records.len() - count - 1]);
-            count += 1;
-        }
-        assert_eq!(count, records.len());
+    let mut count = 0;
+    let mut iter = WalIterator::new(file, ReadDirection::Backward).unwrap();
+    while let Some(record) = iter.next_back() {
+        assert_eq!(
+            record.payload.len(),
+            records[records.len() - count - 1].payload.len()
+        );
+        assert_eq!(record, records[records.len() - count - 1]);
+        count += 1;
     }
+    assert_eq!(count, records.len());
 }
 
 #[test]
@@ -42,7 +40,8 @@ fn test_small_file() {
         record.write(&mut file).unwrap();
 
         test_file(&mut file, vec![record]);
-    }).unwrap();
+    })
+    .unwrap();
 }
 
 #[test]
@@ -66,7 +65,8 @@ fn test_perfect_file() {
         }
 
         test_file(&mut file, records);
-    }).unwrap();
+    })
+    .unwrap();
 }
 
 #[test]
@@ -80,12 +80,11 @@ fn test_back_and_forth() {
         record2.write(&mut file).unwrap();
         record3.write(&mut file).unwrap();
 
-        {
-            let mut iter = WalIterator::new(&mut file, ReadDirection::Forward).unwrap();
-            assert_eq!(iter.next(), Some(record1.clone()));
-            assert_eq!(iter.next(), Some(record2.clone()));
-            assert_eq!(iter.next_back(), Some(record2.clone()));
-            assert_eq!(iter.next_back(), Some(record1.clone()));
-        }
-    }).unwrap();
+        let mut iter = WalIterator::new(&mut file, ReadDirection::Forward).unwrap();
+        assert_eq!(iter.next(), Some(record1.clone()));
+        assert_eq!(iter.next(), Some(record2.clone()));
+        assert_eq!(iter.next_back(), Some(record2.clone()));
+        assert_eq!(iter.next_back(), Some(record1.clone()));
+    })
+    .unwrap();
 }

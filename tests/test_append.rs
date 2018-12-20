@@ -5,7 +5,7 @@ use std::io::{Read, Seek, SeekFrom};
 use disk_utils::testing::{create_test_file, create_two_test_files};
 use disk_utils::wal::append_to_file;
 use disk_utils::wal::iterator::{ReadDirection, WalIterator};
-use disk_utils::wal::record::{BLOCK_SIZE, HEADER_SIZE, Record, RecordType};
+use disk_utils::wal::record::{Record, RecordType, BLOCK_SIZE, HEADER_SIZE};
 
 #[test]
 fn test_no_padding_on_same_block() {
@@ -22,27 +22,30 @@ fn test_no_padding_on_same_block() {
         records.push(Record::new(record_type, vec![123; payload_size as usize]));
     }
 
-    create_two_test_files("./files/direct_write_file",
-                          "./files/writer_file_path",
-                          move |_, _, mut direct_write_file, mut writer_file| {
-        for record in records.iter() {
-            record.write(&mut direct_write_file).unwrap();
-        }
-        direct_write_file.seek(SeekFrom::Start(0)).unwrap();
+    create_two_test_files(
+        "./files/direct_write_file",
+        "./files/writer_file_path",
+        move |_, _, mut direct_write_file, mut writer_file| {
+            for record in records.iter() {
+                record.write(&mut direct_write_file).unwrap();
+            }
+            direct_write_file.seek(SeekFrom::Start(0)).unwrap();
 
-        for record in records.iter() {
-            append_to_file(&mut writer_file, record).unwrap();
-        }
-        writer_file.seek(SeekFrom::Start(0)).unwrap();
+            for record in records.iter() {
+                append_to_file(&mut writer_file, record).unwrap();
+            }
+            writer_file.seek(SeekFrom::Start(0)).unwrap();
 
-        let mut num_comparisons = 0;
-        let file_len = direct_write_file.metadata().unwrap().len();
-        for (b1, b2) in direct_write_file.bytes().zip(writer_file.bytes()) {
-            assert_eq!(b1.unwrap(), b2.unwrap());
-            num_comparisons += 1;
-        }
-        assert_eq!(num_comparisons, file_len);
-    }).unwrap();
+            let mut num_comparisons = 0;
+            let file_len = direct_write_file.metadata().unwrap().len();
+            for (b1, b2) in direct_write_file.bytes().zip(writer_file.bytes()) {
+                assert_eq!(b1.unwrap(), b2.unwrap());
+                num_comparisons += 1;
+            }
+            assert_eq!(num_comparisons, file_len);
+        },
+    )
+    .unwrap();
 }
 
 #[test]
@@ -60,22 +63,22 @@ fn test_padding_before_new_block() {
         records.push(Record::new(record_type, vec![123; payload_size as usize]));
     }
 
-    create_two_test_files("./files/direct_write_file2",
-                          "./files/writer_file_path2",
-                          move |_, _, mut direct_write_file, mut writer_file| {
-        for record in records.iter() {
-            record.write(&mut direct_write_file).unwrap();
-        }
+    create_two_test_files(
+        "./files/direct_write_file2",
+        "./files/writer_file_path2",
+        move |_, _, mut direct_write_file, mut writer_file| {
+            for record in records.iter() {
+                record.write(&mut direct_write_file).unwrap();
+            }
 
-        for record in records.iter() {
-            append_to_file(&mut writer_file, record).unwrap();
-        }
+            for record in records.iter() {
+                append_to_file(&mut writer_file, record).unwrap();
+            }
 
-        let direct_write_file_len = direct_write_file.metadata().unwrap().len();
-        let writer_file_len = writer_file.metadata().unwrap().len();
-        assert!(direct_write_file_len != writer_file_len);
+            let direct_write_file_len = direct_write_file.metadata().unwrap().len();
+            let writer_file_len = writer_file.metadata().unwrap().len();
+            assert!(direct_write_file_len != writer_file_len);
 
-        {
             let mut count = 0;
             let iter = WalIterator::new(&mut writer_file, ReadDirection::Forward).unwrap();
             for (i, record) in iter.enumerate() {
@@ -83,8 +86,9 @@ fn test_padding_before_new_block() {
                 count += 1;
             }
             assert_eq!(count, 8);
-        }
-    }).unwrap();
+        },
+    )
+    .unwrap();
 }
 
 #[test]
@@ -106,14 +110,13 @@ fn test_single_bytes() {
             append_to_file(&mut file, record).unwrap();
         }
 
-        {
-            let mut count = 0;
-            let iter = WalIterator::new(&mut file, ReadDirection::Forward).unwrap();
-            for (i, record) in iter.enumerate() {
-                assert_eq!(record, records[i]);
-                count += 1;
-            }
-            assert_eq!(count, num_records);
+        let mut count = 0;
+        let iter = WalIterator::new(&mut file, ReadDirection::Forward).unwrap();
+        for (i, record) in iter.enumerate() {
+            assert_eq!(record, records[i]);
+            count += 1;
         }
-    }).unwrap();
+        assert_eq!(count, num_records);
+    })
+    .unwrap();
 }

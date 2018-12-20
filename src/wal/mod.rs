@@ -6,7 +6,7 @@ pub mod serializable;
 pub mod undo_log;
 
 use self::iterator::{BlockError, WalIterator};
-use self::record::{BLOCK_SIZE, Record, RecordType};
+use self::record::{Record, RecordType, BLOCK_SIZE};
 
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -95,7 +95,7 @@ pub type SerializeResult<T> = result::Result<T, SerializeError>;
 pub fn read_serializable<S: Serializable>(iter: &mut WalIterator) -> SerializeResult<S> {
     let mut buf = Vec::new();
     let mut state = SerializeState::None;
-    while let Some(mut record) = iter.next() {
+    for mut record in iter {
         match record.record_type {
             RecordType::Zero | RecordType::Full => {
                 return Ok(S::deserialize(&mut &record.payload[..])?);
@@ -166,8 +166,9 @@ pub fn read_serializable_backwards<S: Serializable>(iter: &mut WalIterator) -> S
     Err(SerializeError::OutOfRecords)
 }
 
-pub fn split_bytes_into_records(bytes: Vec<u8>, max_record_size: usize) -> io::Result<Vec<Record>> {
-    let mut records: Vec<_> = bytes.chunks(max_record_size)
+pub fn split_bytes_into_records(bytes: &[u8], max_record_size: usize) -> io::Result<Vec<Record>> {
+    let mut records: Vec<_> = bytes
+        .chunks(max_record_size)
         .map(|bytes| Record::new(RecordType::Middle, bytes.to_vec()))
         .collect();
     if records.len() == 1 {
@@ -188,7 +189,7 @@ pub fn append_to_file(file: &mut File, record: &Record) -> io::Result<()> {
     if curr_block_len + record.payload.len() as u64 > BLOCK_SIZE as u64 {
         let padding_len = BLOCK_SIZE as u64 - curr_block_len;
         let padding = vec![0; padding_len as usize];
-        file.write(&padding[..])?;
+        file.write_all(&padding[..])?;
     }
 
     record.write(file)?;

@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 
 use super::super::Serializable;
 
-use wal::LogData;
+use crate::wal::LogData;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Transaction {
@@ -32,14 +32,17 @@ impl Serializable for Transaction {
 
     fn deserialize<R: Read>(bytes: &mut R) -> io::Result<Transaction> {
         let mut transaction_type = [0; 1];
-        bytes.read(&mut transaction_type)?;
+        bytes.read_exact(&mut transaction_type)?;
 
         let tid = u64::deserialize(bytes)?;
         match transaction_type[0] {
             0 => Ok(Transaction::Start(tid)),
             1 => Ok(Transaction::Commit(tid)),
             2 => Ok(Transaction::Abort(tid)),
-            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid transaction type")),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid transaction type",
+            )),
         }
     }
 }
@@ -54,14 +57,14 @@ impl Serializable for Checkpoint {
     fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()> {
         match *self {
             Checkpoint::Begin(ref transactions) => {
-                bytes.write(&[0])?;
+                bytes.write_all(&[0])?;
                 (transactions.len() as i32).serialize(bytes)?;
                 for tid in transactions.iter() {
                     tid.serialize(bytes)?;
                 }
             }
             Checkpoint::End => {
-                bytes.write(&[1])?;
+                bytes.write_all(&[1])?;
             }
         }
 
@@ -70,7 +73,7 @@ impl Serializable for Checkpoint {
 
     fn deserialize<R: Read>(bytes: &mut R) -> io::Result<Checkpoint> {
         let mut checkpoint_type = [0; 1];
-        bytes.read(&mut checkpoint_type)?;
+        bytes.read_exact(&mut checkpoint_type)?;
 
         match checkpoint_type[0] {
             0 => {
@@ -83,7 +86,10 @@ impl Serializable for Checkpoint {
                 Ok(Checkpoint::Begin(transactions))
             }
             1 => Ok(Checkpoint::End),
-            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid checkpoint type")),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid checkpoint type",
+            )),
         }
     }
 }
@@ -95,7 +101,8 @@ pub struct InsertEntry<Data: LogData> {
 }
 
 impl<Data> Serializable for InsertEntry<Data>
-    where Data: LogData
+where
+    Data: LogData,
 {
     fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()> {
         self.tid.serialize(bytes)?;
@@ -108,10 +115,7 @@ impl<Data> Serializable for InsertEntry<Data>
         let tid = u64::deserialize(bytes)?;
         let key = Data::Key::deserialize(bytes)?;
 
-        Ok(InsertEntry {
-            tid: tid,
-            key: key,
-        })
+        Ok(InsertEntry { tid, key })
     }
 }
 
@@ -123,7 +127,8 @@ pub struct ChangeEntry<Data: LogData> {
 }
 
 impl<Data> Serializable for ChangeEntry<Data>
-    where Data: LogData
+where
+    Data: LogData,
 {
     fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()> {
         self.tid.serialize(bytes)?;
@@ -135,13 +140,12 @@ impl<Data> Serializable for ChangeEntry<Data>
 
     fn deserialize<R: Read>(bytes: &mut R) -> io::Result<ChangeEntry<Data>> {
         let tid = u64::deserialize(bytes)?;
-        let (key, value) = (Data::Key::deserialize(bytes)?, Data::Value::deserialize(bytes)?);
+        let (key, value) = (
+            Data::Key::deserialize(bytes)?,
+            Data::Value::deserialize(bytes)?,
+        );
 
-        Ok(ChangeEntry {
-            tid: tid,
-            key: key,
-            value: value,
-        })
+        Ok(ChangeEntry { tid, key, value })
     }
 }
 
@@ -156,24 +160,25 @@ pub enum SingleLogEntry<Data: LogData> {
 }
 
 impl<Data> Serializable for SingleLogEntry<Data>
-    where Data: LogData
+where
+    Data: LogData,
 {
     fn serialize<W: Write>(&self, bytes: &mut W) -> io::Result<()> {
         match *self {
             SingleLogEntry::InsertEntry(ref entry) => {
-                bytes.write(&[0])?;
+                bytes.write_all(&[0])?;
                 entry.serialize(bytes)
             }
             SingleLogEntry::ChangeEntry(ref entry) => {
-                bytes.write(&[1])?;
+                bytes.write_all(&[1])?;
                 entry.serialize(bytes)
             }
             SingleLogEntry::Transaction(ref entry) => {
-                bytes.write(&[2])?;
+                bytes.write_all(&[2])?;
                 entry.serialize(bytes)
             }
             SingleLogEntry::Checkpoint(ref entry) => {
-                bytes.write(&[3])?;
+                bytes.write_all(&[3])?;
                 entry.serialize(bytes)
             }
         }
@@ -181,14 +186,23 @@ impl<Data> Serializable for SingleLogEntry<Data>
 
     fn deserialize<R: Read>(bytes: &mut R) -> io::Result<SingleLogEntry<Data>> {
         let mut entry_type = [0; 1];
-        bytes.read(&mut entry_type)?;
+        bytes.read_exact(&mut entry_type)?;
 
         match entry_type[0] {
-            0 => Ok(SingleLogEntry::InsertEntry(InsertEntry::deserialize(bytes)?)),
-            1 => Ok(SingleLogEntry::ChangeEntry(ChangeEntry::deserialize(bytes)?)),
-            2 => Ok(SingleLogEntry::Transaction(Transaction::deserialize(bytes)?)),
+            0 => Ok(SingleLogEntry::InsertEntry(InsertEntry::deserialize(
+                bytes,
+            )?)),
+            1 => Ok(SingleLogEntry::ChangeEntry(ChangeEntry::deserialize(
+                bytes,
+            )?)),
+            2 => Ok(SingleLogEntry::Transaction(Transaction::deserialize(
+                bytes,
+            )?)),
             3 => Ok(SingleLogEntry::Checkpoint(Checkpoint::deserialize(bytes)?)),
-            _ => Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid entry type")),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Invalid entry type",
+            )),
         }
     }
 }

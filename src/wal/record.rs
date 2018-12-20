@@ -1,4 +1,4 @@
-use byteorder::{ReadBytesExt, WriteBytesExt, BigEndian};
+use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use crc::crc32;
 
 use std::io;
@@ -55,10 +55,10 @@ impl Record {
     pub fn new(record_type: RecordType, payload: Vec<u8>) -> Record {
         let crc = crc32::checksum_ieee(&payload[..]);
         Record {
-            crc: crc,
+            crc,
             size: payload.len() as u16,
-            record_type: record_type,
-            payload: payload,
+            record_type,
+            payload,
         }
     }
 
@@ -68,7 +68,12 @@ impl Record {
 
         let record_type = match RecordType::from_u8(buf[0]) {
             Some(rt) => rt,
-            None => return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid record type")),
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Invalid record type",
+                ))
+            }
         };
 
         let mut rdr = Cursor::new(buf[1..5].to_vec());
@@ -82,15 +87,17 @@ impl Record {
 
         let payload_crc = crc32::checksum_ieee(&payload[..]);
         if payload_crc != crc {
-            return Err(io::Error::new(io::ErrorKind::InvalidData,
-                                      "CRC checksum failed, possibly corrupted record data"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "CRC checksum failed, possibly corrupted record data",
+            ));
         }
 
         Ok(Record {
-            crc: crc,
-            size: size,
-            record_type: record_type,
-            payload: payload,
+            crc,
+            size,
+            record_type,
+            payload,
         })
     }
 
@@ -105,8 +112,8 @@ impl Record {
         wtr.write_u16::<BigEndian>(self.size)?;
         let (size1, size2) = (wtr[0], wtr[1]);
 
-        writer.write(&[record_type, crc1, crc2, crc3, crc4, size1, size2])?;
-        writer.write(&self.payload)?;
+        writer.write_all(&[record_type, crc1, crc2, crc3, crc4, size1, size2])?;
+        writer.write_all(&self.payload)?;
         writer.flush()?;
 
         Ok(())

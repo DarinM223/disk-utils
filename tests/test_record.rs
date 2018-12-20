@@ -14,7 +14,8 @@ fn test_file_read_write() {
 
         let test_record = Record::read(&mut file).unwrap();
         assert_eq!(record, test_record);
-    }).unwrap();
+    })
+    .unwrap();
 }
 
 #[test]

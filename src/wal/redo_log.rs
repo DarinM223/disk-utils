@@ -1,13 +1,15 @@
-use std::collections::{VecDeque, HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{File, OpenOptions};
 use std::path::Path;
 
 use super::super::Serializable;
 
-use wal::{append_to_file, LogData, LogStore, read_serializable, read_serializable_backwards,
-          RecoverState, Result, split_bytes_into_records};
-use wal::entries::{ChangeEntry, Checkpoint, SingleLogEntry, Transaction};
-use wal::iterator::{ReadDirection, WalIterator};
+use crate::wal::entries::{ChangeEntry, Checkpoint, SingleLogEntry, Transaction};
+use crate::wal::iterator::{ReadDirection, WalIterator};
+use crate::wal::{
+    append_to_file, read_serializable, read_serializable_backwards, split_bytes_into_records,
+    LogData, LogStore, RecoverState, Result,
+};
 
 const MAX_RECORD_SIZE: usize = 1024;
 
@@ -21,8 +23,9 @@ pub struct RedoLog<Data: LogData, Store: LogStore<Data>> {
 }
 
 impl<Data, Store> RedoLog<Data, Store>
-    where Data: LogData,
-          Store: LogStore<Data>
+where
+    Data: LogData,
+    Store: LogStore<Data>,
 {
     pub fn new<P: AsRef<Path> + ?Sized>(path: &P, store: Store) -> Result<RedoLog<Data, Store>> {
         let file = OpenOptions::new()
@@ -31,12 +34,12 @@ impl<Data, Store> RedoLog<Data, Store>
             .create(true)
             .open(path)?;
         let mut log = RedoLog {
-            file: file,
+            file,
             mem_log: VecDeque::new(),
             last_tid: 0,
             changes: Changes::new(),
             active_tids: HashSet::new(),
-            store: store,
+            store,
         };
         log.recover()?;
         Ok(log)
@@ -60,7 +63,8 @@ impl<Data, Store> RedoLog<Data, Store>
         }
 
         // Add end checkpoint to log and flush the log.
-        self.mem_log.push_back(SingleLogEntry::Checkpoint(Checkpoint::End));
+        self.mem_log
+            .push_back(SingleLogEntry::Checkpoint(Checkpoint::End));
         self.flush()?;
 
         Ok(())
@@ -78,7 +82,7 @@ impl<Data, Store> RedoLog<Data, Store>
     pub fn write(&mut self, tid: u64, key: Data::Key, val: Data::Value) {
         if self.active_tids.contains(&tid) {
             let entry = SingleLogEntry::ChangeEntry(ChangeEntry {
-                tid: tid,
+                tid,
                 key: key.clone(),
                 value: val.clone(),
             });
@@ -108,7 +112,7 @@ impl<Data, Store> RedoLog<Data, Store>
             let mut bytes = Vec::new();
             entry.serialize(&mut bytes)?;
 
-            let records = split_bytes_into_records(bytes, MAX_RECORD_SIZE)?;
+            let records = split_bytes_into_records(&bytes, MAX_RECORD_SIZE)?;
             for record in records.iter() {
                 append_to_file(&mut self.file, record)?;
             }
@@ -123,52 +127,50 @@ impl<Data, Store> RedoLog<Data, Store>
         let mut aborted = HashSet::new();
         let mut state = RecoverState::None;
 
-        {
-            let mut iter = WalIterator::new(&mut self.file, ReadDirection::Backward)?;
+        let mut iter = WalIterator::new(&mut self.file, ReadDirection::Backward)?;
 
-            // First pass:
-            while let Ok(data) = read_serializable_backwards::<SingleLogEntry<Data>>(&mut iter) {
-                match data {
-                    SingleLogEntry::Transaction(Transaction::Commit(id)) => {
-                        committed.insert(id);
-                    }
-                    SingleLogEntry::Transaction(Transaction::Abort(id)) => {
-                        aborted.insert(id);
-                    }
-                    SingleLogEntry::Transaction(Transaction::Start(id)) => {
-                        if let RecoverState::Begin(ref mut transactions) = state {
-                            transactions.remove(&id);
-                            if transactions.is_empty() {
-                                break;
-                            }
-                        }
-                    }
-                    SingleLogEntry::ChangeEntry(ref entry) => {
-                        if !committed.contains(&entry.tid) && !aborted.contains(&entry.tid) {
-                            uncommitted.insert(entry.tid);
-                        }
-                    }
-                    SingleLogEntry::Checkpoint(Checkpoint::Begin(transactions)) => {
-                        if state == RecoverState::End {
-                            if transactions.is_empty() {
-                                break;
-                            }
-                            state = RecoverState::Begin(transactions.into_iter().collect());
-                        }
-                    }
-                    SingleLogEntry::Checkpoint(Checkpoint::End) if state == RecoverState::None => {
-                        state = RecoverState::End;
-                    }
-                    _ => {}
+        // First pass:
+        while let Ok(data) = read_serializable_backwards::<SingleLogEntry<Data>>(&mut iter) {
+            match data {
+                SingleLogEntry::Transaction(Transaction::Commit(id)) => {
+                    committed.insert(id);
                 }
-            }
-
-            // Second pass:
-            while let Ok(data) = read_serializable::<SingleLogEntry<Data>>(&mut iter) {
-                if let SingleLogEntry::ChangeEntry(entry) = data {
-                    if committed.contains(&entry.tid) {
-                        self.store.update(entry.key, entry.value);
+                SingleLogEntry::Transaction(Transaction::Abort(id)) => {
+                    aborted.insert(id);
+                }
+                SingleLogEntry::Transaction(Transaction::Start(id)) => {
+                    if let RecoverState::Begin(ref mut transactions) = state {
+                        transactions.remove(&id);
+                        if transactions.is_empty() {
+                            break;
+                        }
                     }
+                }
+                SingleLogEntry::ChangeEntry(ref entry) => {
+                    if !committed.contains(&entry.tid) && !aborted.contains(&entry.tid) {
+                        uncommitted.insert(entry.tid);
+                    }
+                }
+                SingleLogEntry::Checkpoint(Checkpoint::Begin(transactions)) => {
+                    if state == RecoverState::End {
+                        if transactions.is_empty() {
+                            break;
+                        }
+                        state = RecoverState::Begin(transactions.into_iter().collect());
+                    }
+                }
+                SingleLogEntry::Checkpoint(Checkpoint::End) if state == RecoverState::None => {
+                    state = RecoverState::End;
+                }
+                _ => {}
+            }
+        }
+
+        // Second pass:
+        while let Ok(data) = read_serializable::<SingleLogEntry<Data>>(&mut iter) {
+            if let SingleLogEntry::ChangeEntry(entry) = data {
+                if committed.contains(&entry.tid) {
+                    self.store.update(entry.key, entry.value);
                 }
             }
         }
@@ -176,7 +178,8 @@ impl<Data, Store> RedoLog<Data, Store>
         // Flush redo store changes first before writing aborts to the log.
         self.store.flush()?;
         for tid in uncommitted.iter() {
-            self.mem_log.push_back(SingleLogEntry::Transaction(Transaction::Abort(*tid)));
+            self.mem_log
+                .push_back(SingleLogEntry::Transaction(Transaction::Abort(*tid)));
         }
 
         // Set the last tid to the largest tid.
@@ -191,14 +194,14 @@ impl<Data, Store> RedoLog<Data, Store>
     }
 }
 
-
 struct Changes<Data: LogData> {
     committed_tids: HashSet<u64>,
     transaction_changes: Vec<(u64, Data::Key, Data::Value)>,
 }
 
 impl<Data> Changes<Data>
-    where Data: LogData
+where
+    Data: LogData,
 {
     fn new() -> Changes<Data> {
         Changes {

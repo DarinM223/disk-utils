@@ -4,7 +4,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::mem;
 use std::result;
 
-use wal::record::{BLOCK_SIZE, Record};
+use crate::wal::record::{Record, BLOCK_SIZE};
 
 #[derive(PartialEq)]
 pub enum ReadDirection {
@@ -45,10 +45,10 @@ impl<'a> WalIterator<'a> {
         };
 
         Ok(WalIterator {
-            manager: manager,
-            direction: direction,
-            block: block,
-            index: index,
+            manager,
+            direction,
+            block,
+            index,
         })
     }
 }
@@ -66,8 +66,7 @@ impl<'a> Iterator for WalIterator<'a> {
 
         if self.index + 1 >= self.block.len() as i32 {
             match self.manager.next() {
-                Err(BlockError::OutOfBounds) |
-                Err(BlockError::EmptyBlock) => return None,
+                Err(BlockError::OutOfBounds) | Err(BlockError::EmptyBlock) => return None,
                 Err(e) => panic!("next() error: {:?}", e),
                 _ => {}
             }
@@ -90,8 +89,7 @@ impl<'a> DoubleEndedIterator for WalIterator<'a> {
 
         if self.index - 1 < 0 {
             match self.manager.prev() {
-                Err(BlockError::OutOfBounds) |
-                Err(BlockError::EmptyBlock) => return None,
+                Err(BlockError::OutOfBounds) | Err(BlockError::EmptyBlock) => return None,
                 Err(e) => panic!("next_back() error: {:?}", e),
                 _ => {}
             }
@@ -129,16 +127,15 @@ impl<'a> BlockManager<'a> {
 
         let block = match check_out_of_bounds(pos, file_len).and_then(|_| load_block(file, pos)) {
             Ok(block) => block,
-            Err(BlockError::EmptyBlock) |
-            Err(BlockError::OutOfBounds) => Vec::new(),
+            Err(BlockError::EmptyBlock) | Err(BlockError::OutOfBounds) => Vec::new(),
             Err(e) => return Err(e),
         };
 
         Ok(BlockManager {
-            file: file,
+            file,
             len: file_len,
-            pos: pos,
-            block: block,
+            pos,
+            block,
         })
     }
 
@@ -147,7 +144,6 @@ impl<'a> BlockManager<'a> {
     }
 
     fn next(&mut self) -> Result<()> {
-        check_out_of_bounds(self.pos, self.len)?;
         self.pos += BLOCK_SIZE;
         check_out_of_bounds(self.pos, self.len)?;
 
@@ -156,7 +152,6 @@ impl<'a> BlockManager<'a> {
     }
 
     fn prev(&mut self) -> Result<()> {
-        check_out_of_bounds(self.pos, self.len)?;
         self.pos -= BLOCK_SIZE;
         check_out_of_bounds(self.pos, self.len)?;
 
@@ -168,6 +163,7 @@ impl<'a> BlockManager<'a> {
 fn load_block(file: &mut File, pos: i64) -> Result<Vec<Record>> {
     file.seek(SeekFrom::Start(pos as u64))?;
     let mut buf = [0; BLOCK_SIZE as usize];
+    // TODO(DarinM223): replacing read with read_exact causes problems
     file.read(&mut buf)?;
 
     // Read records from the bytes and add them to the block.
@@ -176,7 +172,7 @@ fn load_block(file: &mut File, pos: i64) -> Result<Vec<Record>> {
     while let Ok(record) = Record::read(&mut bytes) {
         block.push(record);
     }
-    if block.len() == 0 {
+    if block.is_empty() {
         return Err(BlockError::EmptyBlock);
     }
 

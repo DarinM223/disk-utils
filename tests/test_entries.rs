@@ -1,8 +1,8 @@
 extern crate disk_utils;
 
-use disk_utils::Serializable;
-use disk_utils::wal::LogData;
 use disk_utils::wal::entries::{ChangeEntry, Checkpoint, InsertEntry};
+use disk_utils::wal::LogData;
+use disk_utils::Serializable;
 
 #[derive(Clone, PartialEq, Debug)]
 struct MyLogData;
@@ -14,10 +14,7 @@ impl LogData for MyLogData {
 
 #[test]
 fn test_insert_entry() {
-    let entry: InsertEntry<MyLogData> = InsertEntry {
-        tid: 123,
-        key: 20,
-    };
+    let entry: InsertEntry<MyLogData> = InsertEntry { tid: 123, key: 20 };
 
     let mut bytes = Vec::new();
     entry.serialize(&mut bytes).unwrap();
