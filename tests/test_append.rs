@@ -5,7 +5,7 @@ use std::io::{Read, Seek, SeekFrom};
 use disk_utils::testing::{create_test_file, create_two_test_files};
 use disk_utils::wal::append_to_file;
 use disk_utils::wal::iterator::{ReadDirection, WalIterator};
-use disk_utils::wal::record::{Record, RecordType, BLOCK_SIZE, HEADER_SIZE};
+use disk_utils::wal::record::{BLOCK_SIZE, HEADER_SIZE, Record, RecordType};
 
 #[test]
 fn test_no_padding_on_same_block() {

@@ -72,7 +72,7 @@ impl Record {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     "Invalid record type",
-                ))
+                ));
             }
         };
 

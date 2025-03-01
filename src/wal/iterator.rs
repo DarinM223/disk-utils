@@ -4,7 +4,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::mem;
 use std::result;
 
-use crate::wal::record::{Record, BLOCK_SIZE};
+use crate::wal::record::{BLOCK_SIZE, Record};
 
 #[derive(PartialEq)]
 pub enum ReadDirection {
@@ -35,8 +35,8 @@ pub struct WalIterator<'a> {
     index: i32,
 }
 
-impl<'a> WalIterator<'a> {
-    pub fn new<'b>(file: &'b mut File, direction: ReadDirection) -> Result<WalIterator<'b>> {
+impl WalIterator<'_> {
+    pub fn new(file: &mut File, direction: ReadDirection) -> Result<WalIterator<'_>> {
         let mut manager = BlockManager::new(file, &direction)?;
         let block = manager.curr();
         let index = match direction {
@@ -53,7 +53,7 @@ impl<'a> WalIterator<'a> {
     }
 }
 
-impl<'a> Iterator for WalIterator<'a> {
+impl Iterator for WalIterator<'_> {
     type Item = Record;
 
     /// Given the current position, return the record at the position and
@@ -80,7 +80,7 @@ impl<'a> Iterator for WalIterator<'a> {
     }
 }
 
-impl<'a> DoubleEndedIterator for WalIterator<'a> {
+impl DoubleEndedIterator for WalIterator<'_> {
     fn next_back(&mut self) -> Option<Record> {
         if self.direction == ReadDirection::Forward {
             self.direction = ReadDirection::Backward;
@@ -110,7 +110,7 @@ struct BlockManager<'a> {
     block: Vec<Record>,
 }
 
-impl<'a> BlockManager<'a> {
+impl BlockManager<'_> {
     fn new<'b>(file: &'b mut File, direction: &ReadDirection) -> Result<BlockManager<'b>> {
         let file_len = file.metadata()?.len() as i64;
         let pos = match *direction {
@@ -140,7 +140,7 @@ impl<'a> BlockManager<'a> {
     }
 
     fn curr(&mut self) -> Vec<Record> {
-        mem::replace(&mut self.block, Vec::new())
+        mem::take(&mut self.block)
     }
 
     fn next(&mut self) -> Result<()> {
@@ -163,12 +163,11 @@ impl<'a> BlockManager<'a> {
 fn load_block(file: &mut File, pos: i64) -> Result<Vec<Record>> {
     file.seek(SeekFrom::Start(pos as u64))?;
     let mut buf = [0; BLOCK_SIZE as usize];
-    // TODO(DarinM223): replacing read with read_exact causes problems
-    file.read(&mut buf)?;
+    let amount = file.read(&mut buf)?;
 
     // Read records from the bytes and add them to the block.
     let mut block = Vec::new();
-    let mut bytes = &buf[..];
+    let mut bytes = &buf[..amount];
     while let Ok(record) = Record::read(&mut bytes) {
         block.push(record);
     }

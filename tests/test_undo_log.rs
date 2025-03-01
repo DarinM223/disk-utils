@@ -8,7 +8,7 @@ use disk_utils::testing::create_test_file;
 use disk_utils::wal::entries::{ChangeEntry, Checkpoint, InsertEntry, SingleLogEntry, Transaction};
 use disk_utils::wal::iterator::{ReadDirection, WalIterator};
 use disk_utils::wal::undo_log::UndoLog;
-use disk_utils::wal::{read_serializable, LogData, LogStore};
+use disk_utils::wal::{LogData, LogStore, read_serializable};
 
 #[derive(Clone, PartialEq, Debug)]
 struct MyLogData;

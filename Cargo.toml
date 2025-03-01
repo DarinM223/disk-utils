@@ -7,7 +7,7 @@ repository = "https://github.com/DarinM223/disk-utils"
 readme = "README.md"
 keywords = ["wal", "disk", "log", "data-structure"]
 license = "MIT"
-edition = "2018"
+edition = "2024"
 
 [dependencies]
 byteorder = "0.5"

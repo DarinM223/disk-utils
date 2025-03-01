@@ -6,7 +6,7 @@ pub mod serializable;
 pub mod undo_log;
 
 use self::iterator::{BlockError, WalIterator};
-use self::record::{Record, RecordType, BLOCK_SIZE};
+use self::record::{BLOCK_SIZE, Record, RecordType};
 
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -171,13 +171,13 @@ pub fn split_bytes_into_records(bytes: &[u8], max_record_size: usize) -> io::Res
         .chunks(max_record_size)
         .map(|bytes| Record::new(RecordType::Middle, bytes.to_vec()))
         .collect();
-    if records.len() == 1 {
-        records.first_mut().unwrap().record_type = RecordType::Full;
-    } else if records.len() > 1 {
-        records.first_mut().unwrap().record_type = RecordType::First;
-        records.last_mut().unwrap().record_type = RecordType::Last;
-    } else {
-        records.push(Record::new(RecordType::Zero, vec![]));
+    match records.len().cmp(&1) {
+        std::cmp::Ordering::Equal => records.first_mut().unwrap().record_type = RecordType::Full,
+        std::cmp::Ordering::Greater => {
+            records.first_mut().unwrap().record_type = RecordType::First;
+            records.last_mut().unwrap().record_type = RecordType::Last;
+        }
+        std::cmp::Ordering::Less => records.push(Record::new(RecordType::Zero, vec![])),
     }
 
     Ok(records)

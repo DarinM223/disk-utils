@@ -5,7 +5,7 @@ use std::io::{Seek, SeekFrom};
 
 use disk_utils::testing::create_test_file;
 use disk_utils::wal::iterator::{ReadDirection, WalIterator};
-use disk_utils::wal::record::{Record, RecordType, BLOCK_SIZE, HEADER_SIZE};
+use disk_utils::wal::record::{BLOCK_SIZE, HEADER_SIZE, Record, RecordType};
 
 fn test_file(file: &mut File, records: Vec<Record>) {
     // Test going from beginning to end.

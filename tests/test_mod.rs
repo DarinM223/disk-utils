@@ -1,14 +1,14 @@
 extern crate disk_utils;
 
+use disk_utils::Serializable;
 use disk_utils::testing::create_test_file;
 use disk_utils::wal::entries::ChangeEntry;
 use disk_utils::wal::iterator::{ReadDirection, WalIterator};
 use disk_utils::wal::record::RecordType;
 use disk_utils::wal::{
-    append_to_file, read_serializable, read_serializable_backwards, split_bytes_into_records,
-    LogData,
+    LogData, append_to_file, read_serializable, read_serializable_backwards,
+    split_bytes_into_records,
 };
-use disk_utils::Serializable;
 
 #[derive(Clone, PartialEq, Debug)]
 struct MyLogData;

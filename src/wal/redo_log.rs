@@ -7,8 +7,8 @@ use super::super::Serializable;
 use crate::wal::entries::{ChangeEntry, Checkpoint, SingleLogEntry, Transaction};
 use crate::wal::iterator::{ReadDirection, WalIterator};
 use crate::wal::{
-    append_to_file, read_serializable, read_serializable_backwards, split_bytes_into_records,
-    LogData, LogStore, RecoverState, Result,
+    LogData, LogStore, RecoverState, Result, append_to_file, read_serializable,
+    read_serializable_backwards, split_bytes_into_records,
 };
 
 const MAX_RECORD_SIZE: usize = 1024;

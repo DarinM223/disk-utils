@@ -44,7 +44,7 @@ impl Serializable for i32 {
         bytes.read_exact(&mut buf)?;
 
         let mut rdr = Cursor::new(buf[..].to_vec());
-        Ok(rdr.read_i32::<BigEndian>()?)
+        rdr.read_i32::<BigEndian>()
     }
 }
 

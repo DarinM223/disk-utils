@@ -1,8 +1,8 @@
 extern crate disk_utils;
 
-use disk_utils::wal::entries::{ChangeEntry, Checkpoint, InsertEntry};
-use disk_utils::wal::LogData;
 use disk_utils::Serializable;
+use disk_utils::wal::LogData;
+use disk_utils::wal::entries::{ChangeEntry, Checkpoint, InsertEntry};
 
 #[derive(Clone, PartialEq, Debug)]
 struct MyLogData;
