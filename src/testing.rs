@@ -11,7 +11,7 @@ use std::result;
 #[derive(Debug)]
 pub enum TestFileError {
     IoError(io::Error),
-    ThreadError(Box<Any + Send + 'static>),
+    ThreadError(Box<dyn Any + Send + 'static>),
 }
 
 impl From<io::Error> for TestFileError {
@@ -20,8 +20,8 @@ impl From<io::Error> for TestFileError {
     }
 }
 
-impl From<Box<Any + Send + 'static>> for TestFileError {
-    fn from(err: Box<Any + Send + 'static>) -> TestFileError {
+impl From<Box<dyn Any + Send + 'static>> for TestFileError {
+    fn from(err: Box<dyn Any + Send + 'static>) -> TestFileError {
         TestFileError::ThreadError(err)
     }
 }
